@@ -224,12 +224,14 @@ final class ZoneController {
         return best
     }
 
-    /// 바가 놓일 자리(왼쪽 위 원점 좌표계). 영역이 화면에서 차지하는 범위 안쪽, 선택한 가장자리의 가운데다.
+    /// 바가 놓일 자리(왼쪽 위 원점 좌표계). 영역의 맨 앞 창이 화면에서 차지하는 범위 안쪽, 선택한 가장자리의 가운데다.
     /// 창이 화면 끝까지 닿아 있거나 밖으로 나가 있으면 Dock처럼 화면 가장자리에 붙는다.
     private func barFrame(for zone: Zone) -> CGRect {
         let size = TabBarPanel.size(tabCount: zone.windows.count, horizontal: edge.isHorizontal)
         let margin: CGFloat = 4
-        let area = zone.bounds
+        // 맨 앞 창을 기준으로 붙인다. 묶음 전체 범위를 쓰면 뒤에 깔린 큰 창 쪽에 바가 떠서
+        // 지금 보고 있는 창과 떨어져 보인다.
+        let area = zone.rect
         // 영역을 벗어나지 않는 범위에서 가운데 정렬한다.
         let centerX = min(max(area.midX - size.width / 2, area.minX), max(area.maxX - size.width, area.minX))
         let centerY = min(max(area.midY - size.height / 2, area.minY), max(area.maxY - size.height, area.minY))
