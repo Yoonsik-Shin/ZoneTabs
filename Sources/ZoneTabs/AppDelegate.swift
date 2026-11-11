@@ -5,6 +5,9 @@ import ServiceManagement
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let controller = ZoneController()
     private let hotkeys = HotkeyTap()
+    private let updater = Updater()
+    private var updateItem: NSMenuItem!
+    private var updateTimer: Timer?
     private var statusItem: NSStatusItem!
     private var trustTimer: Timer?
     private var tracking = false
@@ -19,13 +22,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let defaults = UserDefaults.standard
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        defaults.register(defaults: ["enabled": true, "idleOpacity": 0.35, "iconSize": 24.0])
+        defaults.register(defaults: ["enabled": true, "idleOpacity": 0.35, "iconSize": 24.0, "slide": 0.5])
         controller.enabled = defaults.bool(forKey: "enabled")
         controller.idleOpacity = CGFloat(min(max(defaults.double(forKey: "idleOpacity"), 0.05), 1))
 
         controller.iconSize = CGFloat(min(max(defaults.double(forKey: "iconSize"), 14), 56))
 
         controller.edge = BarEdge(rawValue: defaults.string(forKey: "edge") ?? "") ?? .right
+
+        controller.slide = CGFloat(min(max(defaults.double(forKey: "slide"), 0), 1))
+        controller.onSlideChanged = { [weak self] position in
+            self?.defaults.set(Double(position), forKey: "slide")
+        }
+        // 바의 설정 버튼을 누르면 메뉴바 아이콘과 같은 메뉴를 그 자리에 띄운다.
+        controller.onSettings = { [weak self] view in
+            self?.statusItem.menu?.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height + 4), in: view)
+        }
 
         buildMenu()
 
@@ -39,6 +51,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 권한 상태를 계속 지켜본다. 실행 중에 권한이 사라졌는데 이벤트 탭이 남아 있으면
         // 시스템 전체 입력이 멈출 수 있으므로, 사라지는 즉시 탭을 없앤다.
+        // 실행 직후와 하루에 한 번 새 버전을 확인한다.
+        checkForUpdate(announce: false)
+        let daily = Timer(timeInterval: 24 * 60 * 60, repeats: true) { [weak self] _ in
+            self?.checkForUpdate(announce: false)
+        }
+        RunLoop.main.add(daily, forMode: .common)
+        updateTimer = daily
+
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.syncWithPermission() }
         RunLoop.main.add(timer, forMode: .common)
         trustTimer = timer
@@ -89,6 +109,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
         menu.addItem(makeEdgeItem())
+        let recenter = NSMenuItem(title: "바를 가운데로 되돌리기", action: #selector(recenterBar), keyEquivalent: "")
+        recenter.target = self
+        menu.addItem(recenter)
         menu.addItem(makeSizeItem())
         menu.addItem(makeOpacityItem())
 
@@ -103,6 +126,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(loginItem)
 
+        updateItem = NSMenuItem(title: "", action: #selector(updateClicked), keyEquivalent: "")
+        updateItem.target = self
+        menu.addItem(updateItem)
+        refreshUpdateItem(note: nil)
+
         let quitItem = NSMenuItem(title: "ZoneTabs 종료", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
@@ -115,6 +143,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeys.enabled = controller.enabled
         enabledItem.state = controller.enabled ? .on : .off
         defaults.set(controller.enabled, forKey: "enabled")
+    }
+
+    // MARK: - 업데이트
+
+    private func refreshUpdateItem(note: String?) {
+        if let release = updater.available {
+            updateItem.title = "새 버전 \(release.version) 설치 후 다시 실행"
+        } else if let note = note {
+            updateItem.title = "업데이트 확인 — \(note)"
+        } else {
+            updateItem.title = "업데이트 확인 (현재 \(updater.currentVersion))"
+        }
+    }
+
+    /// 조용히 새 버전을 확인해 메뉴 항목만 바꿔 둔다. 설치는 사용자가 누를 때만 한다.
+    private func checkForUpdate(announce: Bool) {
+        updater.check { [weak self] result in
+            guard let self = self else { return }
+            switch result {
+            case .success(let release):
+                self.refreshUpdateItem(note: (release == nil && announce) ? "최신 버전입니다 (\(self.updater.currentVersion))" : nil)
+            case .failure:
+                self.refreshUpdateItem(note: announce ? "확인 실패, 다시 시도하세요" : nil)
+            }
+        }
+    }
+
+    @objc private func updateClicked() {
+        if let release = updater.available {
+            updateItem.title = "새 버전 \(release.version) 받는 중…"
+            updater.install(release) { [weak self] error in
+                NSLog("ZoneTabs: 업데이트 실패: \(error.localizedDescription)")
+                self?.updateItem.title = "업데이트 실패 — 다시 시도"
+            }
+        } else {
+            updateItem.title = "업데이트 확인 중…"
+            checkForUpdate(announce: true)
+        }
+    }
+
+    @objc private func recenterBar() {
+        controller.slide = 0.5
+        defaults.set(0.5, forKey: "slide")
     }
 
     @objc private func toggleLoginItem() {

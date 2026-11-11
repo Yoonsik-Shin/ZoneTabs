@@ -36,6 +36,13 @@ final class ZoneController {
     /// 바를 붙일 가장자리.
     var edge: BarEdge = .right { didSet { render() } }
 
+    /// 가장자리를 따라 바가 놓이는 위치. 0은 왼쪽/위 끝, 0.5는 가운데, 1은 오른쪽/아래 끝.
+    var slide: CGFloat = 0.5 { didSet { render() } }
+    /// 바를 끌어서 옮겨 slide가 바뀌었을 때(저장용).
+    var onSlideChanged: ((CGFloat) -> Void)?
+    /// 바의 설정 버튼을 눌렀을 때. 인자는 메뉴를 띄울 기준 뷰.
+    var onSettings: ((NSView) -> Void)?
+
     /// 바의 아이콘 크기(pt).
     var iconSize: CGFloat = 24 {
         didSet {
@@ -224,29 +231,32 @@ final class ZoneController {
         return best
     }
 
-    /// 바가 놓일 자리(왼쪽 위 원점 좌표계). 영역의 맨 앞 창이 화면에서 차지하는 범위 안쪽, 선택한 가장자리의 가운데다.
+    /// 바가 놓일 자리와, 가장자리를 따라 움직일 수 있는 범위(모두 왼쪽 위 원점 좌표계).
+    /// 영역의 맨 앞 창이 화면에서 차지하는 범위 안쪽, 선택한 가장자리에 붙는다.
     /// 창이 화면 끝까지 닿아 있거나 밖으로 나가 있으면 Dock처럼 화면 가장자리에 붙는다.
-    private func barFrame(for zone: Zone) -> CGRect {
+    private func barPlacement(for zone: Zone) -> (frame: CGRect, slideRange: ClosedRange<CGFloat>) {
         let size = TabBarPanel.size(tabCount: zone.windows.count, horizontal: edge.isHorizontal)
         let margin: CGFloat = 4
         // 맨 앞 창을 기준으로 붙인다. 묶음 전체 범위를 쓰면 뒤에 깔린 큰 창 쪽에 바가 떠서
         // 지금 보고 있는 창과 떨어져 보인다.
         let area = zone.rect
-        // 영역을 벗어나지 않는 범위에서 가운데 정렬한다.
-        let centerX = min(max(area.midX - size.width / 2, area.minX), max(area.maxX - size.width, area.minX))
-        let centerY = min(max(area.midY - size.height / 2, area.minY), max(area.maxY - size.height, area.minY))
+        let rangeX = area.minX...max(area.maxX - size.width, area.minX)
+        let rangeY = area.minY...max(area.maxY - size.height, area.minY)
+        // 가장자리를 따라서는 slide 비율만큼, 가장자리와 수직인 방향으로는 여백만큼 띄운다.
+        let alongX = rangeX.lowerBound + (rangeX.upperBound - rangeX.lowerBound) * slide
+        let alongY = rangeY.lowerBound + (rangeY.upperBound - rangeY.lowerBound) * slide
         let origin: CGPoint
         switch edge {
         case .right:
-            origin = CGPoint(x: max(area.maxX - size.width - margin, area.minX), y: centerY)
+            origin = CGPoint(x: max(area.maxX - size.width - margin, area.minX), y: alongY)
         case .left:
-            origin = CGPoint(x: min(area.minX + margin, max(area.maxX - size.width, area.minX)), y: centerY)
+            origin = CGPoint(x: min(area.minX + margin, rangeX.upperBound), y: alongY)
         case .top:
-            origin = CGPoint(x: centerX, y: min(area.minY + margin, max(area.maxY - size.height, area.minY)))
+            origin = CGPoint(x: alongX, y: min(area.minY + margin, rangeY.upperBound))
         case .bottom:
-            origin = CGPoint(x: centerX, y: max(area.maxY - size.height - margin, area.minY))
+            origin = CGPoint(x: alongX, y: max(area.maxY - size.height - margin, area.minY))
         }
-        return CGRect(origin: origin, size: size)
+        return (CGRect(origin: origin, size: size), edge.isHorizontal ? rangeX : rangeY)
     }
 
     private func render() {
@@ -254,7 +264,8 @@ final class ZoneController {
         if enabled, let primaryHeight = NSScreen.screens.first?.frame.height {
             for zone in zones where zone.windows.count >= 2 && zone.bounds.width >= minZoneWidth {
                 guard let front = zone.windows.first else { continue }
-                let slot = barFrame(for: zone)
+                let placement = barPlacement(for: zone)
+                let slot = placement.frame
 
                 // 영역 밖의 다른 창이 탭 바 자리를 덮고 있으면 그 위로 떠 보이지 않게 숨긴다.
                 let frontIndex = ordered.firstIndex { $0.id == front.id } ?? 0
@@ -272,8 +283,12 @@ final class ZoneController {
                 }
                 let cocoaFrame = CGRect(x: slot.minX, y: primaryHeight - slot.maxY,
                                         width: slot.width, height: slot.height)
+                // 움직일 수 있는 범위도 Cocoa 좌표로 바꾼다. 세로 방향은 위아래가 뒤집힌다.
+                let range = placement.slideRange
+                let slideMin = edge.isHorizontal ? range.lowerBound : primaryHeight - range.upperBound - slot.height
+                let slideMax = edge.isHorizontal ? range.upperBound : primaryHeight - range.lowerBound - slot.height
                 states.append(TabBarState(tabs: tabStates, activeID: front.id, frame: cocoaFrame,
-                                          horizontal: edge.isHorizontal))
+                                          horizontal: edge.isHorizontal, slideMin: slideMin, slideMax: slideMax))
             }
         }
 
@@ -281,6 +296,11 @@ final class ZoneController {
             let panel = TabBarPanel()
             panel.idleOpacity = idleOpacity
             panel.onSelect = { [weak self] id in self?.select(id) }
+            panel.onSettings = { [weak self] view in self?.onSettings?(view) }
+            panel.onSlide = { [weak self] position in
+                self?.slide = position
+                self?.onSlideChanged?(position)
+            }
             panels.append(panel)
         }
         for (index, panel) in panels.enumerated() {
