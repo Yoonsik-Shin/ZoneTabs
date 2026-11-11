@@ -158,15 +158,25 @@ final class TabBarPanel: NSPanel {
         background.material = .hudWindow
         background.blendingMode = .behindWindow
         background.state = .active
-        background.wantsLayer = true
-        background.layer?.cornerRadius = 14
-        background.layer?.masksToBounds = true
         background.onHover = { [weak self] inside in
             self?.hovering = inside
             self?.updateAlpha(animated: true)
         }
         contentView = background
         alphaValue = idleOpacity
+    }
+
+    /// 모서리만 고정하고 가운데를 늘려 쓰는 둥근 사각형 마스크.
+    private static func roundedMask(radius: CGFloat) -> NSImage {
+        let edge = radius * 2 + 1
+        let image = NSImage(size: NSSize(width: edge, height: edge), flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+            return true
+        }
+        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
+        image.resizingMode = .stretch
+        return image
     }
 
     override var canBecomeKey: Bool { false }
@@ -241,7 +251,9 @@ final class TabBarPanel: NSPanel {
         current = newState
 
         setFrame(newState.frame, display: false)
-        background.layer?.cornerRadius = Metrics.barRadius
+        // 레이어의 cornerRadius로는 창 뒤 흐림 효과와 그림자가 잘리지 않아 네모난 배경이 비친다.
+        // 흐림 효과 자체를 둥근 모양으로 잘라내고, 그림자도 그 모양에 맞춰 다시 계산하게 한다.
+        background.maskImage = TabBarPanel.roundedMask(radius: Metrics.barRadius)
 
         background.subviews.forEach { $0.removeFromSuperview() }
         // 가로형은 왼쪽부터, 세로형은 위부터 배치한다(Cocoa 좌표는 아래가 0이라 위에서 내려간다).
@@ -285,6 +297,7 @@ final class TabBarPanel: NSPanel {
             updateAlpha(animated: false)
         }
         display()
+        invalidateShadow()
         orderFrontRegardless()
     }
 }
