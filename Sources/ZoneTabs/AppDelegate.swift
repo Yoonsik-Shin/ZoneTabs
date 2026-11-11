@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var opacityLabel: NSTextField!
     private var sizeLabel: NSTextField!
     private var edgeItems: [BarEdge: NSMenuItem] = [:]
+    private var anchorItems: [BarAnchor: NSMenuItem] = [:]
     private var loginItem: NSMenuItem!
     private var permissionItem: NSMenuItem!
 
@@ -29,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.iconSize = CGFloat(min(max(defaults.double(forKey: "iconSize"), 14), 56))
 
         controller.edge = BarEdge(rawValue: defaults.string(forKey: "edge") ?? "") ?? .right
+        controller.anchor = BarAnchor(rawValue: defaults.string(forKey: "anchor") ?? "") ?? .window
 
         controller.slide = CGFloat(min(max(defaults.double(forKey: "slide"), 0), 1))
         controller.onSlideChanged = { [weak self] position in
@@ -255,9 +257,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             submenu.addItem(item)
             edgeItems[edge] = item
         }
+        submenu.addItem(.separator())
+        for anchor in BarAnchor.allCases {
+            let item = NSMenuItem(title: anchor.title, action: #selector(anchorSelected(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = anchor.rawValue
+            item.state = anchor == controller.anchor ? .on : .off
+            submenu.addItem(item)
+            anchorItems[anchor] = item
+        }
         let parent = NSMenuItem(title: "바 위치", action: nil, keyEquivalent: "")
         parent.submenu = submenu
         return parent
+    }
+
+    @objc private func anchorSelected(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let anchor = BarAnchor(rawValue: raw) else { return }
+        controller.anchor = anchor
+        defaults.set(raw, forKey: "anchor")
+        for (key, item) in anchorItems { item.state = key == anchor ? .on : .off }
     }
 
     @objc private func edgeSelected(_ sender: NSMenuItem) {

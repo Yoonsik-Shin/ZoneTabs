@@ -28,6 +28,21 @@ enum BarEdge: String, CaseIterable {
     var isHorizontal: Bool { self == .top || self == .bottom }
 }
 
+/// 바를 무엇에 붙일지.
+enum BarAnchor: String, CaseIterable {
+    /// 영역의 맨 앞 창 가장자리.
+    case window
+    /// 그 창이 있는 화면의 가장자리(Dock처럼).
+    case screen
+
+    var title: String {
+        switch self {
+        case .window: return "창에 붙이기"
+        case .screen: return "화면 가장자리에 붙이기"
+        }
+    }
+}
+
 final class ZoneController {
     var enabled = true { didSet { refresh(force: true) } }
     /// 마우스를 올리지 않았을 때 바의 불투명도(0~1).
@@ -35,6 +50,9 @@ final class ZoneController {
 
     /// 바를 붙일 가장자리.
     var edge: BarEdge = .right { didSet { render() } }
+
+    /// 바를 창에 붙일지 화면에 붙일지.
+    var anchor: BarAnchor = .window { didSet { render() } }
 
     /// 가장자리를 따라 바가 놓이는 위치. 0은 왼쪽/위 끝, 0.5는 가운데, 1은 오른쪽/아래 끝.
     var slide: CGFloat = 0.5 { didSet { render() } }
@@ -246,6 +264,16 @@ final class ZoneController {
         let alongX = rangeX.lowerBound + (rangeX.upperBound - rangeX.lowerBound) * slide
         let alongY = rangeY.lowerBound + (rangeY.upperBound - rangeY.lowerBound) * slide
         let origin: CGPoint
+        if anchor == .screen, let screen = visibleScreenRect(for: area) {
+            // 화면 가장자리에 붙이되, 가장자리를 따라서는 자기 창 옆에 오게 해서 어느 영역의 바인지 알 수 있게 한다.
+            switch edge {
+            case .right: origin = CGPoint(x: screen.maxX - size.width - margin, y: alongY)
+            case .left: origin = CGPoint(x: screen.minX + margin, y: alongY)
+            case .top: origin = CGPoint(x: alongX, y: screen.minY + margin)
+            case .bottom: origin = CGPoint(x: alongX, y: screen.maxY - size.height - margin)
+            }
+            return (CGRect(origin: origin, size: size), edge.isHorizontal ? rangeX : rangeY)
+        }
         switch edge {
         case .right:
             origin = CGPoint(x: max(area.maxX - size.width - margin, area.minX), y: alongY)
@@ -261,16 +289,32 @@ final class ZoneController {
 
     private func render() {
         var states: [TabBarState] = []
+        var placed: [CGRect] = []
         if enabled, let primaryHeight = NSScreen.screens.first?.frame.height {
             for zone in zones where zone.windows.count >= 2 && zone.bounds.width >= minZoneWidth {
                 guard let front = zone.windows.first else { continue }
                 let placement = barPlacement(for: zone)
-                let slot = placement.frame
+                var slot = placement.frame
+                if anchor == .screen {
+                    // 좌우로 나란한 두 영역처럼 같은 화면 가장자리의 같은 자리에 바가 겹치면, 가장자리를 따라 옆으로 비켜 놓는다.
+                    var attempts = 0
+                    while let hit = placed.first(where: { $0.intersects(slot) }), attempts < 16 {
+                        if edge.isHorizontal {
+                            slot.origin.x = hit.maxX + 6
+                        } else {
+                            slot.origin.y = hit.maxY + 6
+                        }
+                        attempts += 1
+                    }
+                }
 
                 // 영역 밖의 다른 창이 탭 바 자리를 덮고 있으면 그 위로 떠 보이지 않게 숨긴다.
                 let frontIndex = ordered.firstIndex { $0.id == front.id } ?? 0
-                let covered = ordered[..<frontIndex].contains { !zone.contains($0.id) && $0.frame.intersects(slot) }
+                // 화면에 붙일 때는 바가 다른 영역의 창 위에 놓이는 것이 정상이므로 이 검사를 하지 않는다.
+                let covered = anchor == .window
+                    && ordered[..<frontIndex].contains { !zone.contains($0.id) && $0.frame.intersects(slot) }
                 if covered { continue }
+                placed.append(slot)
 
                 let tabs = tabOrder(zone)
                 var appCounts: [pid_t: Int] = [:]
