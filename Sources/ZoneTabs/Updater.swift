@@ -124,7 +124,8 @@ final class Updater {
 
         // 이 앱이 완전히 꺼진 뒤에 교체한다. 단축키용 이벤트 탭이 살아 있는 채로 앱을 바꾸거나
         // 권한을 초기화하면 시스템 입력이 멈출 수 있기 때문이다.
-        // 새 버전은 서명이 달라 예전 손쉬운 사용 권한이 맞지 않으므로 초기화해서 다시 허용받는다.
+        // 지금 버전과 새 버전이 모두 고정 인증서로 서명돼 있으면 손쉬운 사용 권한이 그대로 유지된다.
+        // 그렇지 않으면 서명이 달라 예전 권한이 맞지 않으므로 초기화해서 다시 허용받는다.
         let script = """
         while kill -0 "$OLD_PID" 2>/dev/null; do sleep 0.2; done
         MNT="$(mktemp -d /tmp/zonetabs-update.XXXXXX)"
@@ -134,7 +135,10 @@ final class Updater {
                 rm -rf "$APP"
                 mv "$APP.new" "$APP"
                 xattr -dr com.apple.quarantine "$APP" 2>/dev/null
-                tccutil reset Accessibility dev.zonetabs.app >/dev/null 2>&1
+                NEW_STABLE="$(/usr/libexec/PlistBuddy -c "Print :ZTStableSignature" "$APP/Contents/Info.plist" 2>/dev/null)"
+                if [ "$OLD_STABLE" != "true" ] || [ "$NEW_STABLE" != "true" ]; then
+                    tccutil reset Accessibility dev.zonetabs.app >/dev/null 2>&1
+                fi
             fi
         fi
         hdiutil detach "$MNT" -quiet 2>/dev/null
@@ -149,6 +153,8 @@ final class Updater {
         var environment = ProcessInfo.processInfo.environment
         environment["OLD_PID"] = String(ProcessInfo.processInfo.processIdentifier)
         environment["DMG"] = dmgPath
+        let stable = Bundle.main.infoDictionary?["ZTStableSignature"] as? Bool ?? false
+        environment["OLD_STABLE"] = stable ? "true" : "false"
         environment["APP"] = appPath
         process.environment = environment
         process.standardOutput = FileHandle.nullDevice

@@ -20,7 +20,14 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp "$BIN" "$APP/Contents/MacOS/ZoneTabs"
 cp Info.plist "$APP/Contents/Info.plist"
-codesign --force --sign - "$APP"
+# SIGN_IDENTITY가 있으면 그 인증서로, 없으면 임시(ad-hoc) 서명을 한다.
+# 고정 인증서로 서명한 빌드는 업데이트해도 손쉬운 사용 권한이 유지되므로, 앱이 알 수 있게 표시해 둔다.
+if [ -n "${SIGN_IDENTITY:-}" ]; then
+    /usr/libexec/PlistBuddy -c "Add :ZTStableSignature bool true" "$APP/Contents/Info.plist"
+    codesign --force --sign "$SIGN_IDENTITY" ${SIGN_KEYCHAIN:+--keychain "$SIGN_KEYCHAIN"} "$APP"
+else
+    codesign --force --sign - "$APP"
+fi
 
 # 다시 빌드하면 서명이 바뀌어 예전 권한이 맞지 않게 된다. 깨끗이 지우고 새로 허용받는다.
 tccutil reset Accessibility dev.zonetabs.app >/dev/null 2>&1 || true
