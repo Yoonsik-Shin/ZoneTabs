@@ -4,6 +4,8 @@ name: Release
 on:
   push:
     branches: [master]
+    # 문서만 바꿨을 때는 새 릴리스를 만들지 않는다.
+    paths-ignore: ["**.md", "LICENSE", ".gitignore"]
   workflow_dispatch:
 
 permissions:
