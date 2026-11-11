@@ -52,12 +52,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 권한 상태를 계속 지켜본다. 실행 중에 권한이 사라졌는데 이벤트 탭이 남아 있으면
         // 시스템 전체 입력이 멈출 수 있으므로, 사라지는 즉시 탭을 없앤다.
         // 실행 직후와 하루에 한 번 새 버전을 확인한다.
-        checkForUpdate(announce: false)
+        checkForUpdateSilently()
         let daily = Timer(timeInterval: 24 * 60 * 60, repeats: true) { [weak self] _ in
-            self?.checkForUpdate(announce: false)
+            self?.checkForUpdateSilently()
         }
         RunLoop.main.add(daily, forMode: .common)
         updateTimer = daily
+
+        // 대화상자가 떠 있는 동안에도 아래 타이머들이 돌도록, 등록을 마친 뒤 다음 차례에 띄운다.
+        DispatchQueue.main.async { [weak self] in self?.reportFinishedUpdate() }
 
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.syncWithPermission() }
         RunLoop.main.add(timer, forMode: .common)
@@ -129,7 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateItem = NSMenuItem(title: "", action: #selector(updateClicked), keyEquivalent: "")
         updateItem.target = self
         menu.addItem(updateItem)
-        refreshUpdateItem(note: nil)
+        refreshUpdateItem()
 
         let quitItem = NSMenuItem(title: "ZoneTabs 종료", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
@@ -147,39 +150,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 업데이트
 
-    private func refreshUpdateItem(note: String?) {
+    private func refreshUpdateItem() {
         if let release = updater.available {
-            updateItem.title = "새 버전 \(release.version) 설치 후 다시 실행"
-        } else if let note = note {
-            updateItem.title = "업데이트 확인 — \(note)"
+            updateItem.title = "새 버전 \(release.version) 설치…"
         } else {
-            updateItem.title = "업데이트 확인 (현재 \(updater.currentVersion))"
+            updateItem.title = "업데이트 확인… (현재 \(updater.currentVersion))"
         }
     }
 
-    /// 조용히 새 버전을 확인해 메뉴 항목만 바꿔 둔다. 설치는 사용자가 누를 때만 한다.
-    private func checkForUpdate(announce: Bool) {
-        updater.check { [weak self] result in
-            guard let self = self else { return }
-            switch result {
-            case .success(let release):
-                self.refreshUpdateItem(note: (release == nil && announce) ? "최신 버전입니다 (\(self.updater.currentVersion))" : nil)
-            case .failure:
-                self.refreshUpdateItem(note: announce ? "확인 실패, 다시 시도하세요" : nil)
-            }
-        }
+    /// 결과를 분명히 알리는 대화상자. 첫 번째 버튼을 눌렀으면 true.
+    @discardableResult
+    private func showAlert(_ title: String, _ text: String, buttons: [String] = ["확인"]) -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = text
+        buttons.forEach { alert.addButton(withTitle: $0) }
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
+    /// 조용히 새 버전을 확인해 메뉴 항목만 바꿔 둔다(실행 직후와 하루 한 번).
+    private func checkForUpdateSilently() {
+        updater.check { [weak self] _ in self?.refreshUpdateItem() }
+    }
+
+    /// 메뉴에서 눌렀을 때. 결과를 항상 대화상자로 알려 준다.
     @objc private func updateClicked() {
         if let release = updater.available {
-            updateItem.title = "새 버전 \(release.version) 받는 중…"
-            updater.install(release) { [weak self] error in
-                NSLog("ZoneTabs: 업데이트 실패: \(error.localizedDescription)")
-                self?.updateItem.title = "업데이트 실패 — 다시 시도"
+            offerInstall(release)
+            return
+        }
+        updateItem.title = "업데이트 확인 중…"
+        updater.check { [weak self] result in
+            guard let self = self else { return }
+            self.refreshUpdateItem()
+            switch result {
+            case .success(let release?):
+                self.offerInstall(release)
+            case .success(nil):
+                self.showAlert("최신 버전입니다", "ZoneTabs \(self.updater.currentVersion)이(가) 가장 새로운 버전입니다.")
+            case .failure(let error):
+                self.showAlert("업데이트를 확인하지 못했습니다", error.localizedDescription)
             }
+        }
+    }
+
+    private func offerInstall(_ release: Updater.Release) {
+        let install = showAlert(
+            "새 버전 \(release.version)이(가) 있습니다",
+            "현재 버전은 \(updater.currentVersion)입니다. 설치하면 ZoneTabs가 잠깐 꺼졌다가 새 버전으로 다시 실행됩니다.",
+            buttons: ["설치 후 다시 실행", "나중에"])
+        guard install else { return }
+
+        // 다시 실행됐을 때 성공 여부를 알려 주려고 목표 버전을 적어 둔다.
+        defaults.set(release.version, forKey: "pendingUpdateVersion")
+        updateItem.title = "새 버전 \(release.version) 받는 중…"
+        updater.install(release) { [weak self] error in
+            guard let self = self else { return }
+            self.defaults.removeObject(forKey: "pendingUpdateVersion")
+            self.refreshUpdateItem()
+            self.showAlert("업데이트하지 못했습니다", error.localizedDescription)
+        }
+    }
+
+    /// 업데이트로 다시 실행된 경우, 실제로 새 버전이 됐는지 알려 준다.
+    private func reportFinishedUpdate() {
+        guard let target = defaults.string(forKey: "pendingUpdateVersion") else { return }
+        defaults.removeObject(forKey: "pendingUpdateVersion")
+        if target == updater.currentVersion {
+            showAlert("ZoneTabs \(target)(으)로 업데이트되었습니다", "새 버전이 실행 중입니다.")
         } else {
-            updateItem.title = "업데이트 확인 중…"
-            checkForUpdate(announce: true)
+            showAlert("업데이트가 적용되지 않았습니다",
+                      "\(target)을(를) 설치하려 했지만 지금 실행 중인 버전은 \(updater.currentVersion)입니다. 다시 시도해 주세요.")
         }
     }
 
