@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let updater = Updater()
     private var updateItem: NSMenuItem!
     private var updateTimer: Timer?
+    private var activity: NSObjectProtocol?
     private var statusItem: NSStatusItem!
     private var trustTimer: Timer?
     private var tracking = false
@@ -27,6 +28,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let defaults = UserDefaults.standard
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 창이 없는 백그라운드 앱은 시스템이 App Nap으로 타이머를 몇 초씩 늦출 수 있다.
+        // 그러면 "잠시 멈추면 전환"이나 바 위치 갱신이 제때 되지 않으므로 꺼 둔다.
+        activity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep],
+            reason: "창 위치를 따라가고 전환 입력에 바로 반응해야 함")
+
         defaults.register(defaults: ["enabled": true, "idleOpacity": 0.35, "iconSize": 24.0, "slide": 0.5])
         controller.enabled = defaults.bool(forKey: "enabled")
         controller.idleOpacity = CGFloat(min(max(defaults.double(forKey: "idleOpacity"), 0.05), 1))

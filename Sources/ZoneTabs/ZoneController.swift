@@ -108,7 +108,13 @@ final class ZoneController {
         pendingToken += 1
         let token = pendingToken
         let dwell = switchMode == .dwell
-        DispatchQueue.main.asyncAfter(deadline: .now() + (dwell ? dwellDelay : selectionTimeout)) { [weak self] in
+
+        // 백그라운드 앱의 타이머는 시스템이 절전을 위해 몇 초씩 미룰 수 있다.
+        // 멈춤 시간이 그대로 지켜지도록 미루지 못하게(strict) 건다.
+        selectionTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(flags: .strict, queue: .main)
+        timer.schedule(deadline: .now() + (dwell ? dwellDelay : selectionTimeout), leeway: .milliseconds(20))
+        timer.setEventHandler { [weak self] in
             guard let self = self, self.pendingToken == token else { return }
             if dwell {
                 self.confirmSelection()
@@ -116,6 +122,8 @@ final class ZoneController {
                 self.cancelSelection()
             }
         }
+        timer.resume()
+        selectionTimer = timer
     }
 
     /// 단축키가 적용되는 영역을 고르는 기준.
@@ -157,6 +165,13 @@ final class ZoneController {
     private var overviewPanel: TabBarPanel?
     private var overviewVisible = false
     private var overviewToken = 0
+    /// 선택된 창의 자리에 띄우는 테두리.
+    private var highlightPanel: HighlightPanel?
+    /// 바로 전환했을 때 잠깐 테두리를 보여 줄 창.
+    private var flashedID: CGWindowID?
+    private var flashedToken = 0
+    /// 고르다 멈추면 전환하는 방식의 타이머.
+    private var selectionTimer: DispatchSourceTimer?
 
     private var lastSignature = ""
     private var scanning = false
@@ -216,6 +231,7 @@ final class ZoneController {
         ordered = []
         panels.forEach { $0.hide() }
         hideOverview()
+        highlightPanel?.hide()
     }
 
     private func requestScan() {
@@ -444,8 +460,40 @@ final class ZoneController {
         overviewPanel?.hide()
     }
 
+    /// 고르는 중인 창(또는 방금 전환한 창)의 자리에 테두리를 띄운다.
+    private func renderHighlight() {
+        guard enabled, let id = pendingID ?? flashedID,
+              let window = ordered.first(where: { $0.id == id }),
+              let primaryHeight = NSScreen.screens.first?.frame.height
+        else {
+            highlightPanel?.hide()
+            return
+        }
+        // 화면 밖으로 나간 부분은 그려도 보이지 않으니 보이는 부분에만 두른다.
+        let visible = visiblePart(of: window.frame)
+        let frame = CGRect(x: visible.minX, y: primaryHeight - visible.maxY,
+                           width: visible.width, height: visible.height)
+        let panel = highlightPanel ?? HighlightPanel()
+        highlightPanel = panel
+        panel.show(at: frame)
+    }
+
+    /// 바로 전환한 창에 잠깐 테두리를 보여 준다.
+    private func flashHighlight(_ id: CGWindowID) {
+        flashedToken += 1
+        let token = flashedToken
+        flashedID = id
+        renderHighlight()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+            guard let self = self, self.flashedToken == token else { return }
+            self.flashedID = nil
+            self.renderHighlight()
+        }
+    }
+
     private func render() {
         renderOverview()
+        renderHighlight()
         var states: [TabBarState] = []
         var placed: [CGRect] = []
         if enabled, let primaryHeight = NSScreen.screens.first?.frame.height {
@@ -587,6 +635,7 @@ final class ZoneController {
             scheduleSelectionEnd()
         } else {
             select(tabs[next].id)
+            flashHighlight(tabs[next].id)
             // 전환한 영역은 맨 앞으로 오므로 그 바가 첫 번째 패널이다.
             panels.first?.flash()
         }
@@ -608,6 +657,7 @@ final class ZoneController {
             scheduleSelectionEnd()
         } else {
             select(next.id)
+            flashHighlight(next.id)
             // 바로 전환하는 방식에서는 목록을 잠깐만 보여 주고 치운다.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
                 guard let self = self, self.overviewToken == token else { return }
