@@ -53,8 +53,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.statusItem.menu?.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height + 4), in: view)
         }
 
-        buildMenu()
-
         hotkeys.handler = { [weak self] action in
             switch action {
             case .next: self?.controller.cycle(reverse: false)
@@ -72,6 +70,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         hotkeys.enabled = controller.enabled
         hotkeys.hotkey = loadHotkey()
+
+        // 메뉴는 저장된 설정을 모두 읽은 뒤에 만든다. 먼저 만들면 체크 표시와 단축키 안내가
+        // 실제 설정이 아니라 기본값으로 표시된다.
+        buildMenu()
 
         // 권한이 없으면 시스템 안내 창을 띄우고, 허용될 때까지 기다렸다가 시작한다.
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
@@ -252,6 +254,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.dwellDelay = delay
         defaults.set(delay, forKey: "dwellDelay")
         for (key, item) in dwellItems { item.state = key == delay ? .on : .off }
+        // 멈춤 시간을 골랐다는 것은 "잠시 멈추면 전환"을 쓰겠다는 뜻이므로 방식도 함께 바꾼다.
+        controller.switchMode = .dwell
+        defaults.set(SwitchMode.dwell.rawValue, forKey: "switchMode")
+        for (key, item) in modeItems { item.state = key == .dwell ? .on : .off }
+        refreshHotkeyHint()
     }
 
     @objc private func targetSelected(_ sender: NSMenuItem) {
