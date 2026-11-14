@@ -34,11 +34,14 @@ enum CycleTarget: String, CaseIterable {
     case focused
     /// 마우스 포인터가 올라가 있는 영역.
     case pointer
+    /// 영역을 가리지 않고 화면의 모든 창을 차례로.
+    case all
 
     var title: String {
         switch self {
         case .focused: return "지금 쓰고 있는 창의 영역"
         case .pointer: return "마우스가 있는 영역"
+        case .all: return "모든 창 (영역 구분 없이)"
         }
     }
 }
@@ -113,6 +116,10 @@ final class ZoneController {
     private var ordered: [TrackedWindow] = []
     private(set) var zones: [Zone] = []
     private var panels: [TabBarPanel] = []
+    /// "모든 창" 대상으로 넘길 때 화면 가운데에 잠깐 뜨는 전체 창 목록.
+    private var overviewPanel: TabBarPanel?
+    private var overviewVisible = false
+    private var overviewToken = 0
 
     private var lastSignature = ""
     private var scanning = false
@@ -171,6 +178,7 @@ final class ZoneController {
         zones = []
         ordered = []
         panels.forEach { $0.hide() }
+        hideOverview()
     }
 
     private func requestScan() {
@@ -317,7 +325,69 @@ final class ZoneController {
         return (CGRect(origin: origin, size: size), edge.isHorizontal ? rangeX : rangeY)
     }
 
+    private func tabItems(for windows: [TrackedWindow]) -> [TabBarState.Tab] {
+        var appCounts: [pid_t: Int] = [:]
+        for window in windows { appCounts[window.pid, default: 0] += 1 }
+        return windows.map { window in
+            // 같은 앱의 창이 여럿이면 앱 이름만으로 구분이 안 되므로 창 제목을 쓴다.
+            let useTitle = (appCounts[window.pid] ?? 0) > 1 && !window.title.isEmpty
+            let label = useTitle ? window.title : (window.appName.isEmpty ? window.title : window.appName)
+            return TabBarState.Tab(id: window.id, pid: window.pid, label: label)
+        }
+    }
+
+    /// 모든 창을 탭 순서(처음 본 순서)로 늘어놓은 것.
+    private func allWindowsInTabOrder() -> [TrackedWindow] {
+        ordered.sorted { (firstSeen[$0.id] ?? 0) < (firstSeen[$1.id] ?? 0) }
+    }
+
+    /// 지금 키보드 입력을 받고 있는 창. 알 수 없으면 맨 앞 창.
+    private func focusedWindow() -> TrackedWindow? {
+        if let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+           let window = ordered.first(where: { $0.pid == pid }) {
+            return window
+        }
+        return ordered.first
+    }
+
+    /// 전체 창 목록을 쓰고 있는 화면 가운데에 띄우거나 숨긴다.
+    private func renderOverview() {
+        let windows = allWindowsInTabOrder()
+        guard enabled, overviewVisible, windows.count >= 2,
+              let screen = NSScreen.main ?? NSScreen.screens.first, let front = focusedWindow()
+        else {
+            overviewPanel?.hide()
+            return
+        }
+        let panel: TabBarPanel
+        if let existing = overviewPanel {
+            panel = existing
+        } else {
+            panel = TabBarPanel()
+            panel.onSelect = { [weak self] id in
+                self?.select(id)
+                self?.hideOverview()
+            }
+            panel.onSettings = { [weak self] view in self?.onSettings?(view) }
+            overviewPanel = panel
+        }
+        panel.idleOpacity = 1
+        let size = TabBarPanel.size(tabCount: windows.count, horizontal: true)
+        let visible = screen.visibleFrame
+        let origin = CGPoint(x: max(visible.midX - size.width / 2, visible.minX), y: visible.midY - size.height / 2)
+        panel.apply(TabBarState(tabs: tabItems(for: windows), activeID: front.id, pendingID: pendingID,
+                                frame: CGRect(origin: origin, size: size), horizontal: true,
+                                slideMin: origin.x, slideMax: origin.x))
+    }
+
+    private func hideOverview() {
+        overviewToken += 1
+        overviewVisible = false
+        overviewPanel?.hide()
+    }
+
     private func render() {
+        renderOverview()
         var states: [TabBarState] = []
         var placed: [CGRect] = []
         if enabled, let primaryHeight = NSScreen.screens.first?.frame.height {
@@ -346,15 +416,7 @@ final class ZoneController {
                 if covered { continue }
                 placed.append(slot)
 
-                let tabs = tabOrder(zone)
-                var appCounts: [pid_t: Int] = [:]
-                for window in tabs { appCounts[window.pid, default: 0] += 1 }
-                let tabStates = tabs.map { window -> TabBarState.Tab in
-                    // 같은 앱의 창이 여럿이면 앱 이름만으로 구분이 안 되므로 창 제목을 쓴다.
-                    let useTitle = (appCounts[window.pid] ?? 0) > 1 && !window.title.isEmpty
-                    let label = useTitle ? window.title : (window.appName.isEmpty ? window.title : window.appName)
-                    return TabBarState.Tab(id: window.id, pid: window.pid, label: label)
-                }
+                let tabStates = tabItems(for: tabOrder(zone))
                 let cocoaFrame = CGRect(x: slot.minX, y: primaryHeight - slot.maxY,
                                         width: slot.width, height: slot.height)
                 // 움직일 수 있는 범위도 Cocoa 좌표로 바꾼다. 세로 방향은 위아래가 뒤집힌다.
@@ -440,6 +502,10 @@ final class ZoneController {
     /// 대상 영역 안에서 다음/이전 창으로 넘어간다. confirmMode면 고르기만 한다.
     func cycle(reverse: Bool) {
         guard enabled else { return }
+        if cycleTarget == .all {
+            cycleAllWindows(reverse: reverse)
+            return
+        }
 
         // 이미 고르는 중이면 마우스나 포커스가 어디 있든 그 영역 안에서 계속 고른다.
         var index: Int?
@@ -474,11 +540,41 @@ final class ZoneController {
         }
     }
 
+    /// 영역 구분 없이 모든 창을 차례로 넘긴다. 어느 창이 선택되는지는 화면 가운데의 전체 목록으로 보여 준다.
+    private func cycleAllWindows(reverse: Bool) {
+        let windows = allWindowsInTabOrder()
+        guard windows.count >= 2, let from = pendingID ?? focusedWindow()?.id else { return }
+        let current = windows.firstIndex { $0.id == from } ?? 0
+        let next = windows[(current + (reverse ? windows.count - 1 : 1)) % windows.count]
+
+        overviewToken += 1
+        let token = overviewToken
+        overviewVisible = true
+        if confirmMode {
+            pendingID = next.id
+            render()
+            pendingToken += 1
+            let pending = pendingToken
+            DispatchQueue.main.asyncAfter(deadline: .now() + selectionTimeout) { [weak self] in
+                guard let self = self, self.pendingToken == pending else { return }
+                self.cancelSelection()
+            }
+        } else {
+            select(next.id)
+            // 바로 전환하는 방식에서는 목록을 잠깐만 보여 주고 치운다.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                guard let self = self, self.overviewToken == token else { return }
+                self.hideOverview()
+            }
+        }
+    }
+
     /// 고르던 창으로 전환한다.
     func confirmSelection() {
         guard let id = pendingID else { return }
         pendingToken += 1
         select(id)
+        hideOverview()
     }
 
     /// 고르기를 그만두고 아무것도 바꾸지 않는다.
@@ -486,6 +582,7 @@ final class ZoneController {
         guard pendingID != nil else { return }
         pendingToken += 1
         pendingID = nil
+        overviewVisible = false
         render()
     }
 }
