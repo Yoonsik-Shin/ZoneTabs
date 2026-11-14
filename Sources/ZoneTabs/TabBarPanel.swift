@@ -18,6 +18,10 @@ struct TabBarState: Equatable {
     /// 바를 끌어서 옮길 수 있는 범위. 가로형이면 frame.origin.x, 세로형이면 frame.origin.y가 움직일 수 있는 최소·최대값이다.
     var slideMin: CGFloat
     var slideMax: CGFloat
+    /// 이 번호의 탭 뒤에 구분선을 넣는다(영역별로 묶어 보여 줄 때).
+    var separators: [Int] = []
+    /// 바 아래쪽에 적을 한 줄 설명(가로형에서만 쓴다). 예: 선택된 창의 이름.
+    var caption: String?
 }
 
 private enum Metrics {
@@ -31,6 +35,10 @@ private enum Metrics {
     /// 설정 버튼이 바의 진행 방향으로 차지하는 길이.
     static var gearLength: CGFloat { max(16, round(iconSize * 0.9)) }
     static var gearIcon: CGFloat { max(11, round(iconSize * 0.55)) }
+    /// 구분선이 바의 진행 방향으로 차지하는 길이.
+    static var separatorLength: CGFloat { max(9, round(iconSize * 0.4)) }
+    static var captionFont: NSFont { NSFont.systemFont(ofSize: max(11, round(iconSize * 0.42)), weight: .medium) }
+    static var captionHeight: CGFloat { ceil(captionFont.ascender - captionFont.descender) + 8 }
 }
 
 /// 바 안의 버튼 하나(앱 아이콘 또는 설정 버튼). 클릭과 끌기를 구분해서 알려 준다.
@@ -146,11 +154,15 @@ final class TabBarPanel: NSPanel {
         set { Metrics.iconSize = newValue }
     }
 
-    static func size(tabCount: Int, horizontal: Bool) -> CGSize {
+    static func size(tabCount: Int, horizontal: Bool, separators: Int = 0, caption: Bool = false) -> CGSize {
         let count = CGFloat(tabCount)
         let short = Metrics.cell + Metrics.padding * 2
         let long = Metrics.cell * count + Metrics.gap * count + Metrics.gearLength + Metrics.padding * 2
-        return horizontal ? CGSize(width: long, height: short) : CGSize(width: short, height: long)
+            + (Metrics.separatorLength + Metrics.gap) * CGFloat(separators)
+        if horizontal {
+            return CGSize(width: long, height: short + (caption ? Metrics.captionHeight : 0))
+        }
+        return CGSize(width: short, height: long)
     }
 
     init() {
@@ -282,9 +294,15 @@ final class TabBarPanel: NSPanel {
 
         background.subviews.forEach { $0.removeFromSuperview() }
         // 가로형은 왼쪽부터, 세로형은 위부터 배치한다(Cocoa 좌표는 아래가 0이라 위에서 내려간다).
-        var x = Metrics.padding
-        var y = newState.horizontal ? Metrics.padding : newState.frame.height - Metrics.padding - Metrics.cell
-        for tab in newState.tabs {
+        // 가로형에서 설명 줄이 있으면 그만큼 위로 올려 배치하고, 바가 내용보다 넓으면 가운데로 모은다.
+        let captionSpace = (newState.horizontal && newState.caption != nil) ? Metrics.captionHeight : 0
+        let content = TabBarPanel.size(tabCount: newState.tabs.count, horizontal: newState.horizontal,
+                                       separators: newState.separators.count)
+        var x = newState.horizontal ? max(Metrics.padding, (newState.frame.width - content.width) / 2 + Metrics.padding)
+                                    : Metrics.padding
+        var y = newState.horizontal ? Metrics.padding + captionSpace
+                                    : newState.frame.height - Metrics.padding - Metrics.cell
+        for (index, tab) in newState.tabs.enumerated() {
             let icon = NSRunningApplication(processIdentifier: tab.pid)?.icon
             let item = TabItemView(
                 frame: CGRect(x: x, y: y, width: Metrics.cell, height: Metrics.cell),
@@ -300,11 +318,42 @@ final class TabBarPanel: NSPanel {
             } else {
                 y -= Metrics.cell + Metrics.gap
             }
+
+            // 묶음 사이의 구분선.
+            if newState.separators.contains(index) {
+                let line = NSView()
+                line.wantsLayer = true
+                line.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.35).cgColor
+                line.layer?.cornerRadius = 1
+                let length = round(Metrics.cell * 0.6)
+                if newState.horizontal {
+                    line.frame = CGRect(x: x + Metrics.separatorLength / 2 - 1, y: y + (Metrics.cell - length) / 2,
+                                        width: 2, height: length)
+                    x += Metrics.separatorLength + Metrics.gap
+                } else {
+                    let top = y + Metrics.cell
+                    line.frame = CGRect(x: Metrics.padding + (Metrics.cell - length) / 2,
+                                        y: top - Metrics.separatorLength / 2 - 1, width: length, height: 2)
+                    y -= Metrics.separatorLength + Metrics.gap
+                }
+                background.addSubview(line)
+            }
+        }
+
+        if captionSpace > 0, let caption = newState.caption {
+            let label = NSTextField(labelWithString: caption)
+            label.font = Metrics.captionFont
+            label.textColor = .white
+            label.alignment = .center
+            label.lineBreakMode = .byTruncatingMiddle
+            label.frame = CGRect(x: Metrics.padding * 2, y: Metrics.padding,
+                                 width: newState.frame.width - Metrics.padding * 4, height: captionSpace - 4)
+            background.addSubview(label)
         }
 
         // 맨 끝의 설정 버튼.
         let gearFrame = newState.horizontal
-            ? CGRect(x: x, y: Metrics.padding, width: Metrics.gearLength, height: Metrics.cell)
+            ? CGRect(x: x, y: Metrics.padding + captionSpace, width: Metrics.gearLength, height: Metrics.cell)
             : CGRect(x: Metrics.padding, y: Metrics.padding, width: Metrics.cell, height: Metrics.gearLength)
         let gearImage = NSImage(systemSymbolName: "gearshape.fill", accessibilityDescription: "설정")
         let gear = TabItemView(frame: gearFrame, icon: gearImage, iconSize: Metrics.gearIcon,

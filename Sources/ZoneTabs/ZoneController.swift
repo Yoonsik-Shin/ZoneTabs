@@ -336,9 +336,22 @@ final class ZoneController {
         }
     }
 
-    /// 모든 창을 탭 순서(처음 본 순서)로 늘어놓은 것.
-    private func allWindowsInTabOrder() -> [TrackedWindow] {
-        ordered.sorted { (firstSeen[$0.id] ?? 0) < (firstSeen[$1.id] ?? 0) }
+    /// 모든 창을 영역별로 묶어 늘어놓은 것. 영역은 화면에서 왼쪽→오른쪽, 위→아래 순서이고,
+    /// 영역 안에서는 그 영역의 바와 같은 순서다. separators는 묶음이 끝나는 자리(마지막 묶음 제외).
+    private func allWindowsGrouped() -> (windows: [TrackedWindow], separators: [Int]) {
+        let sortedZones = zones.sorted { a, b in
+            // 살짝 어긋난 창들이 순서를 뒤바꾸지 않도록 대략적인 위치로 비교한다.
+            let ax = (a.bounds.minX / 40).rounded(), bx = (b.bounds.minX / 40).rounded()
+            if ax != bx { return ax < bx }
+            return a.bounds.minY < b.bounds.minY
+        }
+        var windows: [TrackedWindow] = []
+        var separators: [Int] = []
+        for (index, zone) in sortedZones.enumerated() {
+            windows.append(contentsOf: tabOrder(zone))
+            if index < sortedZones.count - 1 { separators.append(windows.count - 1) }
+        }
+        return (windows, separators)
     }
 
     /// 지금 키보드 입력을 받고 있는 창. 알 수 없으면 맨 앞 창.
@@ -352,7 +365,7 @@ final class ZoneController {
 
     /// 전체 창 목록을 쓰고 있는 화면 가운데에 띄우거나 숨긴다.
     private func renderOverview() {
-        let windows = allWindowsInTabOrder()
+        let (windows, separators) = allWindowsGrouped()
         guard enabled, overviewVisible, windows.count >= 2,
               let screen = NSScreen.main ?? NSScreen.screens.first, let front = focusedWindow()
         else {
@@ -372,12 +385,20 @@ final class ZoneController {
             overviewPanel = panel
         }
         panel.idleOpacity = 1
-        let size = TabBarPanel.size(tabCount: windows.count, horizontal: true)
+        // 선택된(또는 지금 쓰는) 창이 무엇인지 글로도 보여 준다. 같은 앱의 창이 여럿이면 아이콘만으로는 구분이 안 된다.
+        let shown = windows.first { $0.id == (pendingID ?? front.id) } ?? front
+        let caption = shown.title.isEmpty || shown.title == shown.appName
+            ? shown.appName : "\(shown.appName) — \(shown.title)"
+        var size = TabBarPanel.size(tabCount: windows.count, horizontal: true,
+                                    separators: separators.count, caption: true)
+        // 창이 적어도 설명이 읽힐 만큼의 폭은 확보한다.
+        size.width = max(size.width, 420)
         let visible = screen.visibleFrame
         let origin = CGPoint(x: max(visible.midX - size.width / 2, visible.minX), y: visible.midY - size.height / 2)
         panel.apply(TabBarState(tabs: tabItems(for: windows), activeID: front.id, pendingID: pendingID,
                                 frame: CGRect(origin: origin, size: size), horizontal: true,
-                                slideMin: origin.x, slideMax: origin.x))
+                                slideMin: origin.x, slideMax: origin.x,
+                                separators: separators, caption: caption))
     }
 
     private func hideOverview() {
@@ -542,7 +563,7 @@ final class ZoneController {
 
     /// 영역 구분 없이 모든 창을 차례로 넘긴다. 어느 창이 선택되는지는 화면 가운데의 전체 목록으로 보여 준다.
     private func cycleAllWindows(reverse: Bool) {
-        let windows = allWindowsInTabOrder()
+        let windows = allWindowsGrouped().windows
         guard windows.count >= 2, let from = pendingID ?? focusedWindow()?.id else { return }
         let current = windows.firstIndex { $0.id == from } ?? 0
         let next = windows[(current + (reverse ? windows.count - 1 : 1)) % windows.count]
