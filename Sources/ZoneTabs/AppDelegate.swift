@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sizeLabel: NSTextField!
     private var edgeItems: [BarEdge: NSMenuItem] = [:]
     private var anchorItems: [BarAnchor: NSMenuItem] = [:]
+    private var targetItems: [CycleTarget: NSMenuItem] = [:]
     private var loginItem: NSMenuItem!
     private var hotkeyHintItem: NSMenuItem!
     private var permissionItem: NSMenuItem!
@@ -32,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         controller.edge = BarEdge(rawValue: defaults.string(forKey: "edge") ?? "") ?? .right
         controller.anchor = BarAnchor(rawValue: defaults.string(forKey: "anchor") ?? "") ?? .window
+        controller.cycleTarget = CycleTarget(rawValue: defaults.string(forKey: "cycleTarget") ?? "") ?? .focused
 
         controller.slide = CGFloat(min(max(defaults.double(forKey: "slide"), 0), 1))
         controller.onSlideChanged = { [weak self] position in
@@ -142,6 +144,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let changeHotkey = NSMenuItem(title: "단축키 변경…", action: #selector(changeHotkey), keyEquivalent: "")
         changeHotkey.target = self
         menu.addItem(changeHotkey)
+
+        let targetMenu = NSMenu()
+        for target in CycleTarget.allCases {
+            let item = NSMenuItem(title: target.title, action: #selector(targetSelected(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = target.rawValue
+            item.state = target == controller.cycleTarget ? .on : .off
+            targetMenu.addItem(item)
+            targetItems[target] = item
+        }
+        let targetParent = NSMenuItem(title: "단축키 적용 대상", action: nil, keyEquivalent: "")
+        targetParent.submenu = targetMenu
+        menu.addItem(targetParent)
         menu.addItem(.separator())
 
         loginItem = NSMenuItem(title: "로그인 시 자동 실행", action: #selector(toggleLoginItem), keyEquivalent: "")
@@ -170,6 +185,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - 단축키
+
+    @objc private func targetSelected(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let target = CycleTarget(rawValue: raw) else { return }
+        controller.cycleTarget = target
+        defaults.set(raw, forKey: "cycleTarget")
+        for (key, item) in targetItems { item.state = key == target ? .on : .off }
+    }
 
     private func loadHotkey() -> Hotkey {
         guard defaults.object(forKey: "hotkeyKeyCode") != nil,

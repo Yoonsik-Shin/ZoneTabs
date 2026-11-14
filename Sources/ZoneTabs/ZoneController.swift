@@ -28,6 +28,21 @@ enum BarEdge: String, CaseIterable {
     var isHorizontal: Bool { self == .top || self == .bottom }
 }
 
+/// 단축키(또는 노브)를 눌렀을 때 어느 영역의 창을 넘길지.
+enum CycleTarget: String, CaseIterable {
+    /// 지금 키보드 입력을 받고 있는 창이 있는 영역.
+    case focused
+    /// 마우스 포인터가 올라가 있는 영역.
+    case pointer
+
+    var title: String {
+        switch self {
+        case .focused: return "지금 쓰고 있는 창의 영역"
+        case .pointer: return "마우스가 있는 영역"
+        }
+    }
+}
+
 /// 바를 무엇에 붙일지.
 enum BarAnchor: String, CaseIterable {
     /// 영역의 맨 앞 창 가장자리.
@@ -50,6 +65,9 @@ final class ZoneController {
 
     /// 바를 붙일 가장자리.
     var edge: BarEdge = .right { didSet { render() } }
+
+    /// 단축키가 적용되는 영역을 고르는 기준.
+    var cycleTarget: CycleTarget = .focused
 
     /// 바를 창에 붙일지 화면에 붙일지.
     var anchor: BarAnchor = .window { didSet { render() } }
@@ -380,10 +398,35 @@ final class ZoneController {
         render()
     }
 
-    /// 지금 맨 앞에 있는 창이 속한 영역 안에서 다음/이전 창으로 넘어간다.
+    /// 단축키를 적용할 영역을 고른다. 전환할 창이 2개 이상인 영역만 대상이다.
+    private func targetZoneIndex() -> Int? {
+        let candidates = zones.indices.filter { zones[$0].windows.count >= 2 }
+        guard !candidates.isEmpty else { return nil }
+
+        if cycleTarget == .pointer, let primaryHeight = NSScreen.screens.first?.frame.height {
+            // 마우스 위치를 창 좌표계(왼쪽 위 원점)로 바꿔서, 그 지점을 덮고 있는 영역을 찾는다.
+            let mouse = NSEvent.mouseLocation
+            let point = CGPoint(x: mouse.x, y: primaryHeight - mouse.y)
+            if let index = candidates.first(where: { zones[$0].bounds.contains(point) }) {
+                return index
+            }
+        }
+
+        // 키보드 입력을 받는 앱의 창 중 맨 앞에 있는 것이 지금 쓰고 있는 창이다.
+        // 그 창이 속한 영역을 고르므로, 모니터가 여러 대여도 실제로 쓰고 있는 쪽이 잡힌다.
+        if let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+           let focused = ordered.first(where: { $0.pid == pid }),
+           let index = candidates.first(where: { zones[$0].contains(focused.id) }) {
+            return index
+        }
+        // 쓰고 있는 창이 어느 묶음에도 없으면 아무것도 하지 않는다. 엉뚱한 모니터의 창이 바뀌는 것보다 낫다.
+        return nil
+    }
+
+    /// 대상 영역 안에서 다음/이전 창으로 넘어간다.
     func cycle(reverse: Bool) {
-        guard enabled, let zone = zones.first, zone.windows.count >= 2,
-              let front = zone.windows.first else { return }
+        guard enabled, let index = targetZoneIndex(), let front = zones[index].windows.first else { return }
+        let zone = zones[index]
         let tabs = tabOrder(zone)
         guard let current = tabs.firstIndex(where: { $0.id == front.id }) else { return }
         let next = (current + (reverse ? tabs.count - 1 : 1)) % tabs.count
