@@ -388,5 +388,7 @@ final class ZoneController {
         guard let current = tabs.firstIndex(where: { $0.id == front.id }) else { return }
         let next = (current + (reverse ? tabs.count - 1 : 1)) % tabs.count
         select(tabs[next].id)
+        // 전환한 영역은 맨 앞으로 오므로 그 바가 첫 번째 패널이다.
+        panels.first?.flash()
     }
 }

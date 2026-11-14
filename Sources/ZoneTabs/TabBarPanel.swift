@@ -127,6 +127,8 @@ final class TabBarPanel: NSPanel {
     private var current: TabBarState?
     private var hovering = false
     private var dragOrigin: NSPoint?
+    private var flashToken = 0
+    private var flashing = false
     private let background = HoverBackgroundView()
 
     /// 아이콘 크기(pt). 바꾸면 다음에 그릴 때부터 적용된다.
@@ -183,7 +185,7 @@ final class TabBarPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 
     private func updateAlpha(animated: Bool) {
-        let target: CGFloat = (hovering || dragOrigin != nil) ? 1 : idleOpacity
+        let target: CGFloat = (hovering || flashing || dragOrigin != nil) ? 1 : idleOpacity
         if animated {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.15
@@ -191,6 +193,19 @@ final class TabBarPanel: NSPanel {
             }
         } else {
             alphaValue = target
+        }
+    }
+
+    /// 단축키나 노브로 전환했을 때, 지금 어느 창이 선택됐는지 보이도록 잠깐 선명하게 한다.
+    func flash() {
+        flashToken += 1
+        let token = flashToken
+        flashing = true
+        updateAlpha(animated: false)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            guard let self = self, self.flashToken == token else { return }
+            self.flashing = false
+            self.updateAlpha(animated: true)
         }
     }
 

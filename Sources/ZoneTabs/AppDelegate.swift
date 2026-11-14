@@ -90,6 +90,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// 다른 도구(스트림 컨트롤러 등)에서 단축키 없이 전환을 시킬 수 있는 주소.
+    /// zonetabs://next 는 다음 창, zonetabs://prev 는 이전 창.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls where url.scheme == "zonetabs" {
+            switch url.host {
+            case "next": controller.cycle(reverse: false)
+            case "prev", "previous": controller.cycle(reverse: true)
+            default: break
+            }
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         hotkeys.stop()
     }
@@ -214,21 +226,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "전환 단축키 변경"
-        alert.informativeText = "이 창이 떠 있는 동안 새 단축키를 누르세요. ⌘, ⌥, ⌃ 중 하나 이상을 포함해야 합니다.\n\n다른 앱에서 쓰는 단축키와 겹치면 그 앱의 단축키는 동작하지 않게 됩니다."
+        alert.informativeText = "이 창이 떠 있는 동안 새 단축키를 누르세요. ⌘, ⌥, ⌃ 중 하나 이상을 포함해야 합니다.\n\n누르면 시스템과 실행 중인 앱 메뉴의 단축키와 겹치는지 확인합니다. 겹치는 단축키로 저장하면 그쪽 단축키는 동작하지 않게 됩니다."
+        let container = NSView(frame: CGRect(x: 0, y: 0, width: 300, height: 112))
         let field = NSTextField(labelWithString: "현재: \(hotkeys.hotkey.label)")
         field.alignment = .center
         field.font = NSFont.systemFont(ofSize: 20, weight: .medium)
-        field.frame = CGRect(x: 0, y: 0, width: 260, height: 32)
-        alert.accessoryView = field
+        field.frame = CGRect(x: 0, y: 78, width: 300, height: 30)
+        container.addSubview(field)
+        // 겹치는 단축키를 찾은 결과를 보여 주는 자리.
+        let status = NSTextField(wrappingLabelWithString: "")
+        status.font = NSFont.systemFont(ofSize: 11)
+        status.textColor = .secondaryLabelColor
+        status.alignment = .center
+        status.frame = CGRect(x: 0, y: 0, width: 300, height: 72)
+        container.addSubview(status)
+        alert.accessoryView = container
         alert.addButton(withTitle: "저장")
         alert.addButton(withTitle: "취소")
         alert.addButton(withTitle: "기본값(⌥Tab)으로")
 
         var recorded: Hotkey?
+        var checkToken = 0
+        let ownPID = ProcessInfo.processInfo.processIdentifier
         let monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let hotkey = self?.hotkey(from: event) else { return event }
             recorded = hotkey
             field.stringValue = hotkey.label
+
+            // 시스템 단축키는 바로, 앱 메뉴 단축키는 백그라운드에서 확인해 결과를 채운다.
+            checkToken += 1
+            let token = checkToken
+            let systemHits = ShortcutConflicts.systemHits(for: hotkey)
+            status.textColor = .secondaryLabelColor
+            status.stringValue = "겹치는 단축키를 확인하는 중…"
+            let apps = NSWorkspace.shared.runningApplications
+                .filter { $0.activationPolicy == .regular && $0.processIdentifier != ownPID }
+                .map { (pid: $0.processIdentifier, name: $0.localizedName ?? "앱") }
+            DispatchQueue.global(qos: .userInitiated).async {
+                let menus = ShortcutConflicts.menuHits(for: hotkey, apps: apps, timeLimit: 6)
+                DispatchQueue.main.async {
+                    // 그사이 다른 조합을 눌렀으면 이 결과는 버린다.
+                    guard token == checkToken else { return }
+                    let hits = systemHits + menus.hits
+                    if hits.isEmpty {
+                        status.textColor = .secondaryLabelColor
+                        status.stringValue = menus.complete
+                            ? "시스템과 실행 중인 앱 메뉴에서 겹치는 단축키를 찾지 못했습니다."
+                            : "확인한 범위에서는 겹치지 않습니다(일부 앱은 시간 안에 확인하지 못했습니다)."
+                    } else {
+                        status.textColor = .systemOrange
+                        let shown = hits.prefix(3).joined(separator: "\n")
+                        let more = hits.count > 3 ? "\n외 \(hits.count - 3)곳" : ""
+                        status.stringValue = "겹칩니다:\n" + shown + more
+                    }
+                }
+            }
             return nil
         }
         let response = alert.runModal()

@@ -10,6 +10,17 @@
     <string>ZoneTabs</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>dev.zonetabs.app</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>zonetabs</string>
+            </array>
+        </dict>
+    </array>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
