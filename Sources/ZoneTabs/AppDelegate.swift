@@ -18,7 +18,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var edgeItems: [BarEdge: NSMenuItem] = [:]
     private var anchorItems: [BarAnchor: NSMenuItem] = [:]
     private var targetItems: [CycleTarget: NSMenuItem] = [:]
-    private var modeItems: [Bool: NSMenuItem] = [:]
+    private var modeItems: [SwitchMode: NSMenuItem] = [:]
+    private var dwellItems: [Double: NSMenuItem] = [:]
     private var loginItem: NSMenuItem!
     private var hotkeyHintItem: NSMenuItem!
     private var permissionItem: NSMenuItem!
@@ -56,7 +57,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         controller.onSelectingChanged = { [weak self] selecting in self?.hotkeys.selecting = selecting }
-        controller.confirmMode = defaults.bool(forKey: "confirmMode")
+        // 예전 버전은 "고른 뒤 확정" 여부만 저장했다. 새 설정이 없으면 그 값을 이어받는다.
+        let legacyMode: SwitchMode = defaults.bool(forKey: "confirmMode") ? .confirm : .immediate
+        controller.switchMode = SwitchMode(rawValue: defaults.string(forKey: "switchMode") ?? "") ?? legacyMode
+        if defaults.object(forKey: "dwellDelay") != nil {
+            controller.dwellDelay = min(max(defaults.double(forKey: "dwellDelay"), 0.2), 5)
+        }
         hotkeys.enabled = controller.enabled
         hotkeys.hotkey = loadHotkey()
 
@@ -172,13 +178,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(targetParent)
 
         let modeMenu = NSMenu()
-        for (confirm, title) in [(false, "바로 전환"), (true, "고른 뒤 확정 (노브용)")] {
-            let item = NSMenuItem(title: title, action: #selector(modeSelected(_:)), keyEquivalent: "")
+        for mode in SwitchMode.allCases {
+            let item = NSMenuItem(title: mode.title, action: #selector(modeSelected(_:)), keyEquivalent: "")
             item.target = self
-            item.tag = confirm ? 1 : 0
-            item.state = confirm == controller.confirmMode ? .on : .off
+            item.representedObject = mode.rawValue
+            item.state = mode == controller.switchMode ? .on : .off
             modeMenu.addItem(item)
-            modeItems[confirm] = item
+            modeItems[mode] = item
+        }
+        // "잠시 멈추면 전환"에서 얼마나 멈춰야 전환할지.
+        modeMenu.addItem(.separator())
+        let dwellHeader = NSMenuItem(title: "멈춘 뒤 전환까지", action: nil, keyEquivalent: "")
+        dwellHeader.isEnabled = false
+        modeMenu.addItem(dwellHeader)
+        for delay in [0.4, 0.8, 1.2, 2.0] {
+            let item = NSMenuItem(title: "\(delay)초", action: #selector(dwellSelected(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = delay
+            item.indentationLevel = 1
+            item.state = abs(delay - controller.dwellDelay) < 0.01 ? .on : .off
+            modeMenu.addItem(item)
+            dwellItems[delay] = item
         }
         let modeParent = NSMenuItem(title: "전환 방식", action: nil, keyEquivalent: "")
         modeParent.submenu = modeMenu
@@ -213,11 +233,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - 단축키
 
     @objc private func modeSelected(_ sender: NSMenuItem) {
-        let confirm = sender.tag == 1
-        controller.confirmMode = confirm
-        defaults.set(confirm, forKey: "confirmMode")
-        for (key, item) in modeItems { item.state = key == confirm ? .on : .off }
+        guard let raw = sender.representedObject as? String, let mode = SwitchMode(rawValue: raw) else { return }
+        controller.switchMode = mode
+        defaults.set(raw, forKey: "switchMode")
+        for (key, item) in modeItems { item.state = key == mode ? .on : .off }
         refreshHotkeyHint()
+    }
+
+    @objc private func dwellSelected(_ sender: NSMenuItem) {
+        guard let delay = sender.representedObject as? Double else { return }
+        controller.dwellDelay = delay
+        defaults.set(delay, forKey: "dwellDelay")
+        for (key, item) in dwellItems { item.state = key == delay ? .on : .off }
     }
 
     @objc private func targetSelected(_ sender: NSMenuItem) {
@@ -246,10 +273,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshHotkeyHint() {
         let hotkey = hotkeys.hotkey
-        if controller.confirmMode {
+        if controller.switchMode != .immediate {
             // 확정과 취소는 전환 단축키와 같은 수식 키에 Return / Esc를 누른다.
             let symbols = String(hotkey.label.prefix { "⌃⌥⇧⌘".contains($0) })
-            hotkeyHintItem.title = "고르기: \(hotkey.label) · 확정: \(symbols)Return · 취소: \(symbols)Esc"
+            let confirm = controller.switchMode == .dwell ? "바로 확정" : "확정"
+            hotkeyHintItem.title = "고르기: \(hotkey.label) · \(confirm): \(symbols)Return · 취소: \(symbols)Esc"
         } else {
             hotkeyHintItem.title = hotkey.hasReverse
                 ? "영역 내 전환: \(hotkey.label) (⇧를 더하면 반대 방향)"

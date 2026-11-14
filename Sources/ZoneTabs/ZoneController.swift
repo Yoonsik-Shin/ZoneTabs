@@ -28,6 +28,24 @@ enum BarEdge: String, CaseIterable {
     var isHorizontal: Bool { self == .top || self == .bottom }
 }
 
+/// 단축키(또는 노브)가 창을 언제 전환할지.
+enum SwitchMode: String, CaseIterable {
+    /// 누를 때마다 바로 전환.
+    case immediate
+    /// 고르기만 하다가 확정해야 전환. 한동안 입력이 없으면 취소.
+    case confirm
+    /// 고르다가 잠시 멈추면 그 창으로 전환. 확정을 누르면 기다리지 않고 바로 전환.
+    case dwell
+
+    var title: String {
+        switch self {
+        case .immediate: return "바로 전환"
+        case .confirm: return "고른 뒤 눌러서 확정"
+        case .dwell: return "고른 뒤 잠시 멈추면 전환"
+        }
+    }
+}
+
 /// 단축키(또는 노브)를 눌렀을 때 어느 영역의 창을 넘길지.
 enum CycleTarget: String, CaseIterable {
     /// 지금 키보드 입력을 받고 있는 창이 있는 영역.
@@ -69,8 +87,12 @@ final class ZoneController {
     /// 바를 붙일 가장자리.
     var edge: BarEdge = .right { didSet { render() } }
 
-    /// true면 단축키가 바로 전환하지 않고 바에서 고르기만 하며, confirm()을 불러야 전환된다.
-    var confirmMode = false { didSet { if !confirmMode { cancelSelection() } } }
+    /// 단축키가 창을 언제 전환할지.
+    var switchMode: SwitchMode = .immediate { didSet { if switchMode == .immediate { cancelSelection() } } }
+    /// "잠시 멈추면 전환"에서 기다리는 시간(초).
+    var dwellDelay: TimeInterval = 0.8
+    /// 바로 전환하지 않고 먼저 고르는 방식인지.
+    private var confirmMode: Bool { switchMode != .immediate }
     /// 고르는 중인지가 바뀔 때(단축키 탭에 알려 주기 위한 것).
     var onSelectingChanged: ((Bool) -> Void)?
     /// 고르는 중인 창. 확정하면 이 창으로 전환된다.
@@ -78,8 +100,23 @@ final class ZoneController {
         didSet { if (pendingID != nil) != (oldValue != nil) { onSelectingChanged?(pendingID != nil) } }
     }
     private var pendingToken = 0
-    /// 이 시간 동안 입력이 없으면 고르기를 취소한다.
+    /// "눌러서 확정"에서 이 시간 동안 입력이 없으면 고르기를 취소한다.
     private let selectionTimeout: TimeInterval = 5
+
+    /// 고르는 중에 입력이 끊겼을 때 할 일을 예약한다. 새 입력이 오면 이전 예약은 무효가 된다.
+    private func scheduleSelectionEnd() {
+        pendingToken += 1
+        let token = pendingToken
+        let dwell = switchMode == .dwell
+        DispatchQueue.main.asyncAfter(deadline: .now() + (dwell ? dwellDelay : selectionTimeout)) { [weak self] in
+            guard let self = self, self.pendingToken == token else { return }
+            if dwell {
+                self.confirmSelection()
+            } else {
+                self.cancelSelection()
+            }
+        }
+    }
 
     /// 단축키가 적용되는 영역을 고르는 기준.
     var cycleTarget: CycleTarget = .focused
@@ -520,7 +557,7 @@ final class ZoneController {
         return nil
     }
 
-    /// 대상 영역 안에서 다음/이전 창으로 넘어간다. confirmMode면 고르기만 한다.
+    /// 대상 영역 안에서 다음/이전 창으로 넘어간다. 바로 전환하는 방식이 아니면 고르기만 한다.
     func cycle(reverse: Bool) {
         guard enabled else { return }
         if cycleTarget == .all {
@@ -547,13 +584,7 @@ final class ZoneController {
         if confirmMode {
             pendingID = tabs[next].id
             render()
-            // 한동안 입력이 없으면 고르던 것을 취소한다.
-            pendingToken += 1
-            let token = pendingToken
-            DispatchQueue.main.asyncAfter(deadline: .now() + selectionTimeout) { [weak self] in
-                guard let self = self, self.pendingToken == token else { return }
-                self.cancelSelection()
-            }
+            scheduleSelectionEnd()
         } else {
             select(tabs[next].id)
             // 전환한 영역은 맨 앞으로 오므로 그 바가 첫 번째 패널이다.
@@ -574,12 +605,7 @@ final class ZoneController {
         if confirmMode {
             pendingID = next.id
             render()
-            pendingToken += 1
-            let pending = pendingToken
-            DispatchQueue.main.asyncAfter(deadline: .now() + selectionTimeout) { [weak self] in
-                guard let self = self, self.pendingToken == pending else { return }
-                self.cancelSelection()
-            }
+            scheduleSelectionEnd()
         } else {
             select(next.id)
             // 바로 전환하는 방식에서는 목록을 잠깐만 보여 주고 치운다.
