@@ -21,8 +21,16 @@ struct Hotkey: Equatable {
 /// - 콜백은 전용 스레드에서 돈다. 메인 스레드가 바빠도 키 입력이 밀리지 않는다.
 /// - 권한이 사라지면 즉시 탭을 없앤다(AppDelegate가 감시하다가 stop()을 부른다).
 final class HotkeyTap {
-    /// 인자는 역방향(⇧) 여부. 메인 스레드에서 호출된다.
-    var handler: ((Bool) -> Void)?
+    enum Action {
+        case next, previous
+        /// 고른 창으로 전환을 확정 / 고르기를 취소. 고르는 중(selecting)일 때만 나온다.
+        case confirm, cancel
+    }
+
+    /// 메인 스레드에서 호출된다.
+    var handler: ((Action) -> Void)?
+    /// 고르는 중인지. true인 동안에만 확정(같은 수식 키 + Return)과 취소(같은 수식 키 + Esc)를 가로챈다.
+    var selecting = false
     /// false면 키 입력을 가로채지 않고 그대로 통과시킨다.
     var enabled = true
     /// 가로챌 단축키. 실행 중에 바꿔도 바로 적용된다.
@@ -30,6 +38,9 @@ final class HotkeyTap {
 
     private var tap: CFMachPort?
     private var runLoop: CFRunLoop?
+
+    private static let returnKeyCode: Int64 = 36
+    private static let escapeKeyCode: Int64 = 53
 
     var isRunning: Bool { tap != nil }
 
@@ -48,17 +59,28 @@ final class HotkeyTap {
                 return Unmanaged.passUnretained(event)
             }
             let hotkey = me.hotkey
-            guard type == .keyDown, me.enabled,
-                  event.getIntegerValueField(.keyboardEventKeycode) == Int64(hotkey.keyCode)
-            else { return Unmanaged.passUnretained(event) }
-
+            guard type == .keyDown, me.enabled else { return Unmanaged.passUnretained(event) }
+            let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
             let flags = event.flags.intersection([.maskAlternate, .maskShift, .maskCommand, .maskControl])
             let wanted = CGEventFlags(rawValue: hotkey.modifiers)
-            let forward = flags == wanted
-            let backward = hotkey.hasReverse && flags == wanted.union(.maskShift)
-            guard forward || backward else { return Unmanaged.passUnretained(event) }
 
-            DispatchQueue.main.async { me.handler?(backward) }
+            var action: Action?
+            if keyCode == Int64(hotkey.keyCode) {
+                if flags == wanted {
+                    action = .next
+                } else if hotkey.hasReverse && flags == wanted.union(.maskShift) {
+                    action = .previous
+                }
+            } else if me.selecting && flags == wanted {
+                if keyCode == HotkeyTap.returnKeyCode {
+                    action = .confirm
+                } else if keyCode == HotkeyTap.escapeKeyCode {
+                    action = .cancel
+                }
+            }
+            guard let action = action else { return Unmanaged.passUnretained(event) }
+
+            DispatchQueue.main.async { me.handler?(action) }
             return nil
         }
 

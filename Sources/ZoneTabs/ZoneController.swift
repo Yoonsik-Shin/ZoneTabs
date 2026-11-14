@@ -66,6 +66,18 @@ final class ZoneController {
     /// 바를 붙일 가장자리.
     var edge: BarEdge = .right { didSet { render() } }
 
+    /// true면 단축키가 바로 전환하지 않고 바에서 고르기만 하며, confirm()을 불러야 전환된다.
+    var confirmMode = false { didSet { if !confirmMode { cancelSelection() } } }
+    /// 고르는 중인지가 바뀔 때(단축키 탭에 알려 주기 위한 것).
+    var onSelectingChanged: ((Bool) -> Void)?
+    /// 고르는 중인 창. 확정하면 이 창으로 전환된다.
+    private var pendingID: CGWindowID? {
+        didSet { if (pendingID != nil) != (oldValue != nil) { onSelectingChanged?(pendingID != nil) } }
+    }
+    private var pendingToken = 0
+    /// 이 시간 동안 입력이 없으면 고르기를 취소한다.
+    private let selectionTimeout: TimeInterval = 5
+
     /// 단축키가 적용되는 영역을 고르는 기준.
     var cycleTarget: CycleTarget = .focused
 
@@ -349,7 +361,8 @@ final class ZoneController {
                 let range = placement.slideRange
                 let slideMin = edge.isHorizontal ? range.lowerBound : primaryHeight - range.upperBound - slot.height
                 let slideMax = edge.isHorizontal ? range.upperBound : primaryHeight - range.lowerBound - slot.height
-                states.append(TabBarState(tabs: tabStates, activeID: front.id, frame: cocoaFrame,
+                let pending = pendingID.flatMap { zone.contains($0) ? $0 : nil }
+                states.append(TabBarState(tabs: tabStates, activeID: front.id, pendingID: pending, frame: cocoaFrame,
                                           horizontal: edge.isHorizontal, slideMin: slideMin, slideMax: slideMax))
             }
         }
@@ -377,6 +390,7 @@ final class ZoneController {
     // MARK: - 전환
 
     private func select(_ id: CGWindowID) {
+        pendingID = nil
         guard let zoneIndex = zones.firstIndex(where: { $0.contains(id) }),
               let windowIndex = zones[zoneIndex].windows.firstIndex(where: { $0.id == id })
         else { return }
@@ -423,15 +437,55 @@ final class ZoneController {
         return nil
     }
 
-    /// 대상 영역 안에서 다음/이전 창으로 넘어간다.
+    /// 대상 영역 안에서 다음/이전 창으로 넘어간다. confirmMode면 고르기만 한다.
     func cycle(reverse: Bool) {
-        guard enabled, let index = targetZoneIndex(), let front = zones[index].windows.first else { return }
-        let zone = zones[index]
-        let tabs = tabOrder(zone)
-        guard let current = tabs.firstIndex(where: { $0.id == front.id }) else { return }
+        guard enabled else { return }
+
+        // 이미 고르는 중이면 마우스나 포커스가 어디 있든 그 영역 안에서 계속 고른다.
+        var index: Int?
+        if let pending = pendingID {
+            index = zones.firstIndex { $0.windows.count >= 2 && $0.contains(pending) }
+        }
+        if index == nil {
+            pendingID = nil
+            index = targetZoneIndex()
+        }
+        guard let zoneIndex = index, let front = zones[zoneIndex].windows.first else { return }
+
+        let tabs = tabOrder(zones[zoneIndex])
+        let from = pendingID ?? front.id
+        guard let current = tabs.firstIndex(where: { $0.id == from }) else { return }
         let next = (current + (reverse ? tabs.count - 1 : 1)) % tabs.count
-        select(tabs[next].id)
-        // 전환한 영역은 맨 앞으로 오므로 그 바가 첫 번째 패널이다.
-        panels.first?.flash()
+
+        if confirmMode {
+            pendingID = tabs[next].id
+            render()
+            // 한동안 입력이 없으면 고르던 것을 취소한다.
+            pendingToken += 1
+            let token = pendingToken
+            DispatchQueue.main.asyncAfter(deadline: .now() + selectionTimeout) { [weak self] in
+                guard let self = self, self.pendingToken == token else { return }
+                self.cancelSelection()
+            }
+        } else {
+            select(tabs[next].id)
+            // 전환한 영역은 맨 앞으로 오므로 그 바가 첫 번째 패널이다.
+            panels.first?.flash()
+        }
+    }
+
+    /// 고르던 창으로 전환한다.
+    func confirmSelection() {
+        guard let id = pendingID else { return }
+        pendingToken += 1
+        select(id)
+    }
+
+    /// 고르기를 그만두고 아무것도 바꾸지 않는다.
+    func cancelSelection() {
+        guard pendingID != nil else { return }
+        pendingToken += 1
+        pendingID = nil
+        render()
     }
 }

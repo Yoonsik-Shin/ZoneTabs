@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var edgeItems: [BarEdge: NSMenuItem] = [:]
     private var anchorItems: [BarAnchor: NSMenuItem] = [:]
     private var targetItems: [CycleTarget: NSMenuItem] = [:]
+    private var modeItems: [Bool: NSMenuItem] = [:]
     private var loginItem: NSMenuItem!
     private var hotkeyHintItem: NSMenuItem!
     private var permissionItem: NSMenuItem!
@@ -46,7 +47,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         buildMenu()
 
-        hotkeys.handler = { [weak self] reverse in self?.controller.cycle(reverse: reverse) }
+        hotkeys.handler = { [weak self] action in
+            switch action {
+            case .next: self?.controller.cycle(reverse: false)
+            case .previous: self?.controller.cycle(reverse: true)
+            case .confirm: self?.controller.confirmSelection()
+            case .cancel: self?.controller.cancelSelection()
+            }
+        }
+        controller.onSelectingChanged = { [weak self] selecting in self?.hotkeys.selecting = selecting }
+        controller.confirmMode = defaults.bool(forKey: "confirmMode")
         hotkeys.enabled = controller.enabled
         hotkeys.hotkey = loadHotkey()
 
@@ -93,12 +103,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// 다른 도구(스트림 컨트롤러 등)에서 단축키 없이 전환을 시킬 수 있는 주소.
-    /// zonetabs://next 는 다음 창, zonetabs://prev 는 이전 창.
+    /// zonetabs://next 는 다음 창, zonetabs://prev 는 이전 창,
+    /// zonetabs://confirm 은 고른 창으로 전환, zonetabs://cancel 은 고르기 취소.
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls where url.scheme == "zonetabs" {
             switch url.host {
             case "next": controller.cycle(reverse: false)
             case "prev", "previous": controller.cycle(reverse: true)
+            case "confirm", "select": controller.confirmSelection()
+            case "cancel": controller.cancelSelection()
             default: break
             }
         }
@@ -157,6 +170,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let targetParent = NSMenuItem(title: "단축키 적용 대상", action: nil, keyEquivalent: "")
         targetParent.submenu = targetMenu
         menu.addItem(targetParent)
+
+        let modeMenu = NSMenu()
+        for (confirm, title) in [(false, "바로 전환"), (true, "고른 뒤 확정 (노브용)")] {
+            let item = NSMenuItem(title: title, action: #selector(modeSelected(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = confirm ? 1 : 0
+            item.state = confirm == controller.confirmMode ? .on : .off
+            modeMenu.addItem(item)
+            modeItems[confirm] = item
+        }
+        let modeParent = NSMenuItem(title: "전환 방식", action: nil, keyEquivalent: "")
+        modeParent.submenu = modeMenu
+        menu.addItem(modeParent)
         menu.addItem(.separator())
 
         loginItem = NSMenuItem(title: "로그인 시 자동 실행", action: #selector(toggleLoginItem), keyEquivalent: "")
@@ -186,6 +212,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 단축키
 
+    @objc private func modeSelected(_ sender: NSMenuItem) {
+        let confirm = sender.tag == 1
+        controller.confirmMode = confirm
+        defaults.set(confirm, forKey: "confirmMode")
+        for (key, item) in modeItems { item.state = key == confirm ? .on : .off }
+        refreshHotkeyHint()
+    }
+
     @objc private func targetSelected(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let target = CycleTarget(rawValue: raw) else { return }
         controller.cycleTarget = target
@@ -212,9 +246,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshHotkeyHint() {
         let hotkey = hotkeys.hotkey
-        hotkeyHintItem.title = hotkey.hasReverse
-            ? "영역 내 전환: \(hotkey.label) (⇧를 더하면 반대 방향)"
-            : "영역 내 전환: \(hotkey.label)"
+        if controller.confirmMode {
+            // 확정과 취소는 전환 단축키와 같은 수식 키에 Return / Esc를 누른다.
+            let symbols = String(hotkey.label.prefix { "⌃⌥⇧⌘".contains($0) })
+            hotkeyHintItem.title = "고르기: \(hotkey.label) · 확정: \(symbols)Return · 취소: \(symbols)Esc"
+        } else {
+            hotkeyHintItem.title = hotkey.hasReverse
+                ? "영역 내 전환: \(hotkey.label) (⇧를 더하면 반대 방향)"
+                : "영역 내 전환: \(hotkey.label)"
+        }
     }
 
     /// 키 입력 하나를 단축키로 바꾼다. ⌘, ⌥, ⌃ 중 하나도 없으면 단축키로 쓸 수 없으므로 nil.

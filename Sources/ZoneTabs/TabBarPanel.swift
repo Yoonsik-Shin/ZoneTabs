@@ -9,6 +9,8 @@ struct TabBarState: Equatable {
     }
     var tabs: [Tab]
     var activeID: CGWindowID
+    /// 고르는 중일 때, 확정하면 전환될 창. 고르는 중이 아니면 nil.
+    var pendingID: CGWindowID?
     /// 바의 위치와 크기(Cocoa 좌표계).
     var frame: CGRect
     /// true면 아이콘을 가로로, false면 세로로 늘어놓는다.
@@ -42,11 +44,18 @@ final class TabItemView: NSView {
     private var pressLocation = NSPoint.zero
     private var dragging = false
 
-    init(frame: CGRect, icon: NSImage?, iconSize: CGFloat, tint: NSColor?, title: String, active: Bool) {
+    init(frame: CGRect, icon: NSImage?, iconSize: CGFloat, tint: NSColor?, title: String, active: Bool,
+         pending: Bool = false) {
         super.init(frame: frame)
         wantsLayer = true
         layer?.cornerRadius = Metrics.cellRadius
         layer?.backgroundColor = active ? NSColor.white.withAlphaComponent(0.28).cgColor : NSColor.clear.cgColor
+        if pending {
+            // 고르는 중인 칸은 테두리로 표시해서, 지금 앞에 있는 창(배경만 밝은 칸)과 구분한다.
+            layer?.borderWidth = max(2, round(Metrics.iconSize * 0.1))
+            layer?.borderColor = NSColor.white.cgColor
+            layer?.backgroundColor = NSColor.white.withAlphaComponent(0.45).cgColor
+        }
         toolTip = title
 
         let iconView = NSImageView(frame: CGRect(x: (frame.width - iconSize) / 2, y: (frame.height - iconSize) / 2,
@@ -185,7 +194,8 @@ final class TabBarPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 
     private func updateAlpha(animated: Bool) {
-        let target: CGFloat = (hovering || flashing || dragOrigin != nil) ? 1 : idleOpacity
+        let selecting = current?.pendingID != nil
+        let target: CGFloat = (hovering || flashing || selecting || dragOrigin != nil) ? 1 : idleOpacity
         if animated {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.15
@@ -279,7 +289,8 @@ final class TabBarPanel: NSPanel {
             let item = TabItemView(
                 frame: CGRect(x: x, y: y, width: Metrics.cell, height: Metrics.cell),
                 icon: icon, iconSize: Metrics.iconSize, tint: nil,
-                title: tab.label, active: tab.id == newState.activeID)
+                title: tab.label, active: tab.id == newState.activeID,
+                pending: tab.id == newState.pendingID)
             let id = tab.id
             item.onClick = { [weak self] in self?.onSelect?(id) }
             attachDrag(to: item)
@@ -306,6 +317,8 @@ final class TabBarPanel: NSPanel {
         attachDrag(to: gear)
         background.addSubview(gear)
 
+        // 고르는 중에는 선명하게, 끝나면 원래대로.
+        updateAlpha(animated: wasVisible)
         if !wasVisible {
             // 새로 나타날 때는 마우스 위치를 직접 확인해 호버 상태를 맞춘다.
             hovering = newState.frame.contains(NSEvent.mouseLocation)
