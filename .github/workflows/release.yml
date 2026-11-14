@@ -60,6 +60,13 @@ jobs:
       - name: Build app (Apple Silicon + Intel)
         run: UNIVERSAL=1 bash build.sh
 
+      # 어떤 서명으로 만들어졌는지 로그에 남긴다. 고정 인증서라면 designated requirement에 인증서 지문이 나온다.
+      - name: Show signature
+        run: |
+          codesign --verify --deep --strict --verbose=2 build/ZoneTabs.app
+          codesign -dvv build/ZoneTabs.app 2>&1 | grep -E "Identifier|Authority|Signature|TeamIdentifier" || true
+          codesign -d -r- build/ZoneTabs.app 2>&1 | tail -1
+
       - name: Create dmg
         run: |
           mkdir staging
