@@ -20,6 +20,18 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp "$BIN" "$APP/Contents/MacOS/ZoneTabs"
 cp Info.plist "$APP/Contents/Info.plist"
+
+# 아이콘 원본(1024px PNG)에서 크기별 이미지를 만들어 .icns로 묶는다.
+ICONSET="build/AppIcon.iconset"
+rm -rf "$ICONSET"
+mkdir -p "$ICONSET" "$APP/Contents/Resources"
+for size in 16 32 128 256 512; do
+    sips -z "$size" "$size" Resources/AppIcon.png --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+    double=$((size * 2))
+    sips -z "$double" "$double" Resources/AppIcon.png --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+done
+iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
+rm -rf "$ICONSET"
 # SIGN_IDENTITY가 있으면 그 인증서로, 없으면 임시(ad-hoc) 서명을 한다.
 # 고정 인증서로 서명한 빌드는 업데이트해도 손쉬운 사용 권한이 유지되므로, 앱이 알 수 있게 표시해 둔다.
 if [ -n "${SIGN_IDENTITY:-}" ]; then

@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var edgeItems: [BarEdge: NSMenuItem] = [:]
     private var anchorItems: [BarAnchor: NSMenuItem] = [:]
     private var loginItem: NSMenuItem!
+    private var hotkeyHintItem: NSMenuItem!
     private var permissionItem: NSMenuItem!
 
     private let defaults = UserDefaults.standard
@@ -45,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         hotkeys.handler = { [weak self] reverse in self?.controller.cycle(reverse: reverse) }
         hotkeys.enabled = controller.enabled
+        hotkeys.hotkey = loadHotkey()
 
         // 권한이 없으면 시스템 안내 창을 띄우고, 허용될 때까지 기다렸다가 시작한다.
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
@@ -121,9 +123,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(makeOpacityItem())
 
         menu.addItem(.separator())
-        let hint = NSMenuItem(title: "영역 내 전환: ⌥Tab / ⌥⇧Tab", action: nil, keyEquivalent: "")
-        hint.isEnabled = false
-        menu.addItem(hint)
+        hotkeyHintItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        hotkeyHintItem.isEnabled = false
+        menu.addItem(hotkeyHintItem)
+        refreshHotkeyHint()
+        let changeHotkey = NSMenuItem(title: "단축키 변경…", action: #selector(changeHotkey), keyEquivalent: "")
+        changeHotkey.target = self
+        menu.addItem(changeHotkey)
         menu.addItem(.separator())
 
         loginItem = NSMenuItem(title: "로그인 시 자동 실행", action: #selector(toggleLoginItem), keyEquivalent: "")
@@ -146,8 +152,96 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleEnabled() {
         controller.enabled.toggle()
         hotkeys.enabled = controller.enabled
+        hotkeys.hotkey = loadHotkey()
         enabledItem.state = controller.enabled ? .on : .off
         defaults.set(controller.enabled, forKey: "enabled")
+    }
+
+    // MARK: - 단축키
+
+    private func loadHotkey() -> Hotkey {
+        guard defaults.object(forKey: "hotkeyKeyCode") != nil,
+              let label = defaults.string(forKey: "hotkeyLabel"), !label.isEmpty,
+              let modifiers = defaults.object(forKey: "hotkeyModifiers") as? NSNumber
+        else { return .standard }
+        return Hotkey(keyCode: defaults.integer(forKey: "hotkeyKeyCode"),
+                      modifiers: modifiers.uint64Value, label: label)
+    }
+
+    private func applyHotkey(_ hotkey: Hotkey) {
+        hotkeys.hotkey = hotkey
+        defaults.set(hotkey.keyCode, forKey: "hotkeyKeyCode")
+        defaults.set(NSNumber(value: hotkey.modifiers), forKey: "hotkeyModifiers")
+        defaults.set(hotkey.label, forKey: "hotkeyLabel")
+        refreshHotkeyHint()
+    }
+
+    private func refreshHotkeyHint() {
+        let hotkey = hotkeys.hotkey
+        hotkeyHintItem.title = hotkey.hasReverse
+            ? "영역 내 전환: \(hotkey.label) (⇧를 더하면 반대 방향)"
+            : "영역 내 전환: \(hotkey.label)"
+    }
+
+    /// 키 입력 하나를 단축키로 바꾼다. ⌘, ⌥, ⌃ 중 하나도 없으면 단축키로 쓸 수 없으므로 nil.
+    private func hotkey(from event: NSEvent) -> Hotkey? {
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        guard !flags.intersection([.command, .option, .control]).isEmpty else { return nil }
+
+        var modifiers = CGEventFlags()
+        var symbols = ""
+        if flags.contains(.control) { modifiers.insert(.maskControl); symbols += "⌃" }
+        if flags.contains(.option) { modifiers.insert(.maskAlternate); symbols += "⌥" }
+        if flags.contains(.shift) { modifiers.insert(.maskShift); symbols += "⇧" }
+        if flags.contains(.command) { modifiers.insert(.maskCommand); symbols += "⌘" }
+
+        let names: [UInt16: String] = [
+            48: "Tab", 49: "Space", 36: "Return", 51: "Delete", 53: "Esc", 50: "`",
+            123: "←", 124: "→", 125: "↓", 126: "↑",
+            122: "F1", 120: "F2", 99: "F3", 118: "F4", 96: "F5", 97: "F6",
+            98: "F7", 100: "F8", 101: "F9", 109: "F10", 103: "F11", 111: "F12",
+        ]
+        var name = names[event.keyCode] ?? (event.charactersIgnoringModifiers ?? "").uppercased()
+        if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { name = "Key\(event.keyCode)" }
+        return Hotkey(keyCode: Int(event.keyCode), modifiers: modifiers.rawValue, label: symbols + name)
+    }
+
+    @objc private func changeHotkey() {
+        // 녹화하는 동안에는 기존 단축키를 가로채지 않아야 같은 조합도 다시 입력할 수 있다.
+        hotkeys.enabled = false
+        defer { hotkeys.enabled = controller.enabled }
+
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "전환 단축키 변경"
+        alert.informativeText = "이 창이 떠 있는 동안 새 단축키를 누르세요. ⌘, ⌥, ⌃ 중 하나 이상을 포함해야 합니다.\n\n다른 앱에서 쓰는 단축키와 겹치면 그 앱의 단축키는 동작하지 않게 됩니다."
+        let field = NSTextField(labelWithString: "현재: \(hotkeys.hotkey.label)")
+        field.alignment = .center
+        field.font = NSFont.systemFont(ofSize: 20, weight: .medium)
+        field.frame = CGRect(x: 0, y: 0, width: 260, height: 32)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "저장")
+        alert.addButton(withTitle: "취소")
+        alert.addButton(withTitle: "기본값(⌥Tab)으로")
+
+        var recorded: Hotkey?
+        let monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let hotkey = self?.hotkey(from: event) else { return event }
+            recorded = hotkey
+            field.stringValue = hotkey.label
+            return nil
+        }
+        let response = alert.runModal()
+        if let monitor = monitor { NSEvent.removeMonitor(monitor) }
+
+        switch response {
+        case .alertFirstButtonReturn:
+            if let recorded = recorded { applyHotkey(recorded) }
+        case .alertThirdButtonReturn:
+            applyHotkey(.standard)
+        default:
+            break
+        }
     }
 
     // MARK: - 업데이트
