@@ -181,6 +181,11 @@ final class ZoneController {
     private var timer: Timer?
     private let scanQueue = DispatchQueue(label: "dev.zonetabs.scan", qos: .userInitiated)
 
+    /// 지금 인식하고 있는 창 수와, 창이 2개 이상 겹친 묶음 수(상태 표시용).
+    var status: (windows: Int, stacks: Int) {
+        (ordered.count, zones.filter { $0.windows.count >= 2 }.count)
+    }
+
     func start() {
         guard timer == nil else { return }
         let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }

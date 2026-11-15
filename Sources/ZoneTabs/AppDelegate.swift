@@ -2,7 +2,7 @@ import AppKit
 import ApplicationServices
 import ServiceManagement
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let controller = ZoneController()
     private let hotkeys = HotkeyTap()
     private let updater = Updater()
@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var loginItem: NSMenuItem!
     private var hotkeyHintItem: NSMenuItem!
     private var permissionItem: NSMenuItem!
+    private var statusLineItem: NSMenuItem!
 
     private let defaults = UserDefaults.standard
 
@@ -117,6 +118,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === statusItem.menu else { return }
+        if !AXIsProcessTrusted() {
+            statusLineItem.title = "상태: 손쉬운 사용 권한 없음 — 동작하지 않는 중"
+        } else if !controller.enabled {
+            statusLineItem.title = "상태: 꺼짐 (탭 바 사용이 해제됨)"
+        } else {
+            let status = controller.status
+            var text = "상태: 동작 중 — 창 \(status.windows)개 인식, 겹친 묶음 \(status.stacks)개"
+            if !hotkeys.isRunning { text += " · 단축키 사용 불가" }
+            statusLineItem.title = text
+        }
+    }
+
     /// 다른 도구(스트림 컨트롤러 등)에서 단축키 없이 전환을 시킬 수 있는 주소.
     /// zonetabs://next 는 다음 창, zonetabs://prev 는 이전 창,
     /// zonetabs://confirm 은 고른 창으로 전환, zonetabs://cancel 은 고르기 취소.
@@ -145,6 +160,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let menu = NSMenu()
+        menu.delegate = self
+
+        // 지금 제대로 동작하고 있는지 한 줄로 보여 준다. 메뉴를 열 때마다 갱신된다.
+        statusLineItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        statusLineItem.isEnabled = false
+        menu.addItem(statusLineItem)
 
         permissionItem = NSMenuItem(title: "손쉬운 사용 권한 필요 — 설정 열기", action: #selector(openAccessibilitySettings), keyEquivalent: "")
         permissionItem.target = self
