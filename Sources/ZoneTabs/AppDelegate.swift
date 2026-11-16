@@ -143,9 +143,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         lines.append("")
         lines.append("설정은 메뉴바의 ZoneTabs 아이콘(둘로 나뉜 사각형)이나 바 끝의 톱니바퀴에서 바꿉니다.")
 
-        let buttons = trusted ? ["확인"] : ["손쉬운 사용 설정 열기", "확인"]
-        let first = showAlert("ZoneTabs 상태", lines.joined(separator: "\n"), buttons: buttons)
-        if !trusted && first { openAccessibilitySettings() }
+        // 동작을 막고 있는 것이 있으면 그 자리에서 바로 풀 수 있게 한다.
+        // 메뉴바 아이콘이 숨어 있으면 메뉴로는 다시 켤 방법이 없기 때문이다.
+        if !trusted {
+            if showAlert("ZoneTabs 상태", lines.joined(separator: "\n"), buttons: ["손쉬운 사용 설정 열기", "확인"]) {
+                openAccessibilitySettings()
+            }
+        } else if !controller.enabled {
+            lines.append("")
+            lines.append("탭 바 사용이 꺼져 있어서 바와 단축키가 동작하지 않습니다.")
+            if showAlert("ZoneTabs 상태", lines.joined(separator: "\n"), buttons: ["탭 바 켜기", "그대로 두기"]) {
+                toggleEnabled()
+            }
+        } else {
+            showAlert("ZoneTabs 상태", lines.joined(separator: "\n"))
+        }
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
