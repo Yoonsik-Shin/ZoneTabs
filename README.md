@@ -16,12 +16,30 @@
 
 ## 설치
 
+### 터미널로 설치 (추천)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Yoonsik-Shin/ZoneTabs/master/scripts/install-release.sh | bash
+```
+
+최신 버전을 받아 `/Applications`에 설치하고 실행한다. 이 방법은 "열지 않음" 경고가 뜨지 않는다. 실행 후 **손쉬운 사용** 권한 요청을 허용하면 된다.
+
+### dmg로 설치
+
 1. [Releases](../../releases/latest)에서 `ZoneTabs.dmg`를 받아 연다.
 2. ZoneTabs를 Applications 폴더로 끌어다 놓는다.
-3. 응용 프로그램에서 ZoneTabs를 연다. Apple 개발자 서명이 없는 앱이라 처음에는 열리지 않는다. 시스템 설정 > 개인정보 보호 및 보안 맨 아래의 "그래도 열기"를 누르면 열린다.
+3. 응용 프로그램에서 ZoneTabs를 연다. Apple 개발자 서명이 없는 앱이라 처음에는 열리지 않는다(아래 참고).
 4. **손쉬운 사용** 권한을 요청하면 시스템 설정 > 개인정보 보호 및 보안 > 손쉬운 사용에서 ZoneTabs를 켠다. 켜면 자동으로 시작된다.
 
 메뉴바 아이콘 메뉴에서 "로그인 시 자동 실행"을 켜 두면 직접 열 필요가 없다.
+
+### 잘 동작하는지 확인
+
+ZoneTabs는 Dock 아이콘과 창이 없다. 실행 중에 앱을 한 번 더 열면 상태 창이 떠서 권한, 인식한 창 수, 겹친 묶음 수를 보여 준다.
+
+```bash
+open /Applications/ZoneTabs.app
+```
 
 ### 처음 열 때 "열지 않음" 경고가 뜨면
 

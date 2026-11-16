@@ -118,6 +118,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// 이미 실행 중일 때 앱을 다시 열면(더블클릭, open 명령) 상태 창을 보여 준다.
+    /// 메뉴바 아이콘이 노치 뒤로 숨어 안 보일 때도 동작 여부를 확인할 수 있다.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showStatusDialog()
+        return false
+    }
+
+    private func showStatusDialog() {
+        let trusted = AXIsProcessTrusted()
+        let status = controller.status
+        var lines = [
+            "버전: \(updater.currentVersion)",
+            "손쉬운 사용 권한: \(trusted ? "있음" : "없음 — 이 권한이 없으면 동작하지 않습니다")",
+            "탭 바 사용: \(controller.enabled ? "켜짐" : "꺼짐")",
+            "전환 단축키: \(hotkeys.isRunning ? "동작 중 (\(hotkeys.hotkey.label))" : "사용 불가")",
+            "인식한 창: \(status.windows)개",
+            "창이 겹친 묶음: \(status.stacks)개",
+        ]
+        if trusted && status.windows > 0 && status.stacks == 0 {
+            lines.append("")
+            lines.append("바는 창이 2개 이상 같은 자리에 겹쳐 있을 때만 뜹니다. 지금은 겹친 창이 없습니다.")
+        }
+        lines.append("")
+        lines.append("설정은 메뉴바의 ZoneTabs 아이콘(둘로 나뉜 사각형)이나 바 끝의 톱니바퀴에서 바꿉니다.")
+
+        let buttons = trusted ? ["확인"] : ["손쉬운 사용 설정 열기", "확인"]
+        let first = showAlert("ZoneTabs 상태", lines.joined(separator: "\n"), buttons: buttons)
+        if !trusted && first { openAccessibilitySettings() }
+    }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
         guard menu === statusItem.menu else { return }
         if !AXIsProcessTrusted() {
@@ -142,6 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case "prev", "previous": controller.cycle(reverse: true)
             case "confirm", "select": controller.confirmSelection()
             case "cancel": controller.cancelSelection()
+            case "status": showStatusDialog()
             default: break
             }
         }
